@@ -9,6 +9,8 @@ import {
   fetchImageBlobUrl,
   getSession,
   listPendingSubmissions,
+  runModerationOnce,
+  runModerationSelected,
   startGoogleSignIn,
   updateSubmissionStatus,
 } from './api';
@@ -22,6 +24,9 @@ type AccessState =
 type BusyAction = {
   id: string;
   status: ModerationStatus;
+} | {
+  id: '__ai__';
+  status: 'pending_openai';
 } | null;
 
 const STATUS_TRANSITIONS: Record<ModerationStatus, ModerationStatus[]> = {
@@ -32,6 +37,9 @@ const STATUS_TRANSITIONS: Record<ModerationStatus, ModerationStatus[]> = {
   remove_request: ['active', 'stale'],
   stale: ['active'],
 };
+
+const MANUAL_QUEUE_STATUSES = new Set<ModerationStatus>(['pending_audit', 'flagged', 'remove_request']);
+const REVIEWED_STATUSES = new Set<ModerationStatus>(['active', 'stale']);
 
 export default function App() {
   const [access, setAccess] = useState<AccessState>({ status: 'loading' });
@@ -59,6 +67,18 @@ export default function App() {
   const selectedVisibleItems = useMemo(
     () => visibleItems.filter((item) => selectedIds.includes(item.id)),
     [selectedIds, visibleItems],
+  );
+  const pendingOpenAiItems = useMemo(
+    () => visibleItems.filter((item) => item.status === 'pending_openai'),
+    [visibleItems],
+  );
+  const manualQueueItems = useMemo(
+    () => visibleItems.filter((item) => MANUAL_QUEUE_STATUSES.has(item.status)),
+    [visibleItems],
+  );
+  const reviewedItems = useMemo(
+    () => visibleItems.filter((item) => REVIEWED_STATUSES.has(item.status)),
+    [visibleItems],
   );
   const statusCounts = useMemo(() => Object.fromEntries(
     MODERATION_STATUSES.map((status) => [
@@ -232,6 +252,49 @@ export default function App() {
     }
   }, [refresh]);
 
+  const sendSelectedToAi = useCallback(async (targets: PendingSubmission[]) => {
+    const pendingTargets = targets.filter((item) => item.status === 'pending_openai');
+    if (pendingTargets.length === 0) {
+      setError('No pending_openai items selected.');
+      return;
+    }
+
+    setLoading(true);
+    setBusyAction({ id: '__ai__', status: 'pending_openai' });
+    setError(null);
+    try {
+      const processed = await runModerationSelected(pendingTargets.map((item) => item.id));
+      await refresh();
+      setError(`Sent ${pendingTargets.length} item(s) to AI review, processed ${processed}.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to send selected items to AI review.');
+    } finally {
+      setBusyAction(null);
+      setLoading(false);
+    }
+  }, [refresh]);
+
+  const sendCurrentToAi = useCallback(async () => {
+    if (!selected || selected.status !== 'pending_openai') {
+      setError('Current item is not pending_openai.');
+      return;
+    }
+
+    setLoading(true);
+    setBusyAction({ id: '__ai__', status: 'pending_openai' });
+    setError(null);
+    try {
+      const processed = await runModerationSelected([selected.id]);
+      await refresh();
+      setError(`Sent current item to AI review, processed ${processed}.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to send current item to AI review.');
+    } finally {
+      setBusyAction(null);
+      setLoading(false);
+    }
+  }, [refresh, selected]);
+
   const signIn = useCallback(async () => {
     setSignInBusy(true);
     setError(null);
@@ -249,6 +312,8 @@ export default function App() {
     selectedVisibleItems,
     loading,
     updateMany,
+    sendSelectedToAi,
+    aiBusy: busyAction?.id === '__ai__',
   });
 
   if (access.status === 'loading') {
@@ -277,6 +342,29 @@ export default function App() {
       actions={(
         <>
           <button type="button" onClick={() => void refresh()} disabled={loading}>Refresh</button>
+          <button
+            type="button"
+            onClick={() => {
+              setLoading(true);
+              setBusyAction({ id: '__ai__', status: 'pending_openai' });
+              setError(null);
+              void runModerationOnce()
+                .then(async (processed) => {
+                  await refresh();
+                  setError(`Sent queue to AI review, processed ${processed}.`);
+                })
+                .catch((err) => {
+                  setError(err instanceof Error ? err.message : 'Failed to run AI review.');
+                })
+                .finally(() => {
+                  setBusyAction(null);
+                  setLoading(false);
+                });
+            }}
+            disabled={loading || busyAction?.id === '__ai__'}
+          >
+            {busyAction?.id === '__ai__' ? 'Sending to AI...' : 'Run AI Review'}
+          </button>
           <button type="button" className="danger-ghost" onClick={() => void clearStaleImages()} disabled={loading}>Delete Stale</button>
           <button type="button" className="danger-ghost" onClick={() => void clearTestImages()} disabled={loading}>Delete _test</button>
         </>
@@ -317,31 +405,112 @@ export default function App() {
           {loading && visibleItems.length === 0 ? (
             <div className="empty">Loading queue...</div>
           ) : visibleItems.length === 0 ? (
-            <div className="empty">No pending images.</div>
+            <div className="empty">No items.</div>
           ) : (
-            visibleItems.map((item) => (
-              <div
-                key={item.id}
-                className={item.id === selected?.id ? 'queue-item active' : 'queue-item'}
-              >
-                <label className="select-box" onClick={(event) => event.stopPropagation()}>
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.includes(item.id)}
-                    onChange={() => toggleSelected(item.id)}
-                  />
-                </label>
-                <button type="button" className="queue-main" onClick={() => setSelectedId(item.id)}>
-                  <span className="queue-title">
-                    <strong>{item.poiType}</strong>
-                    <small>{statusLabel(item.status)}</small>
-                  </span>
-                  <span>{item.poiHash}</span>
-                  <small>{formatBytes(item.sizeBytes)} / {formatUserSummary(item)}</small>
-                  {item.moderationNote && <small className="queue-note">{item.moderationNote}</small>}
-                </button>
-              </div>
-            ))
+            <div className="queue-groups">
+              {pendingOpenAiItems.length > 0 && (
+                <section className="queue-group">
+                  <div className="queue-group-head">
+                    <strong>Pending OpenAI</strong>
+                    <span>{pendingOpenAiItems.length}</span>
+                  </div>
+                  <div className="queue-items">
+                    {pendingOpenAiItems.map((item) => (
+                      <div
+                        key={item.id}
+                        className={item.id === selected?.id ? 'queue-item active' : 'queue-item'}
+                      >
+                        <label className="select-box" onClick={(event) => event.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.includes(item.id)}
+                            onChange={() => toggleSelected(item.id)}
+                          />
+                        </label>
+                        <button type="button" className="queue-main" onClick={() => setSelectedId(item.id)}>
+                          <span className="queue-title">
+                            <strong>{item.poiType}</strong>
+                            <small>{statusLabel(item.status)}</small>
+                          </span>
+                          <span className="queue-line">{item.poiHash}</span>
+                          <span className="queue-line">{formatUserSummary(item)} · {formatBytes(item.sizeBytes)}</span>
+                          <span className="queue-time">{formatAuditSummary(item)}</span>
+                          {item.moderationNote && <small className="queue-note">{item.moderationNote}</small>}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
+              {manualQueueItems.length > 0 && (
+                <section className="queue-group">
+                  <div className="queue-group-head">
+                    <strong>Manual Queue</strong>
+                    <span>{manualQueueItems.length}</span>
+                  </div>
+                  <div className="queue-items">
+                    {manualQueueItems.map((item) => (
+                      <div
+                        key={item.id}
+                        className={item.id === selected?.id ? 'queue-item active' : 'queue-item'}
+                      >
+                        <label className="select-box" onClick={(event) => event.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.includes(item.id)}
+                            onChange={() => toggleSelected(item.id)}
+                          />
+                        </label>
+                        <button type="button" className="queue-main" onClick={() => setSelectedId(item.id)}>
+                          <span className="queue-title">
+                            <strong>{item.poiType}</strong>
+                            <small>{statusLabel(item.status)}</small>
+                          </span>
+                          <span className="queue-line">{item.poiHash}</span>
+                          <span className="queue-line">{formatUserSummary(item)} · {formatBytes(item.sizeBytes)}</span>
+                          <span className="queue-time">{formatAuditSummary(item)}</span>
+                          {item.moderationNote && <small className="queue-note">{item.moderationNote}</small>}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
+              {reviewedItems.length > 0 && (
+                <section className="queue-group">
+                  <div className="queue-group-head">
+                    <strong>Reviewed</strong>
+                    <span>{reviewedItems.length}</span>
+                  </div>
+                  <div className="queue-items">
+                    {reviewedItems.map((item) => (
+                      <div
+                        key={item.id}
+                        className={item.id === selected?.id ? 'queue-item active' : 'queue-item'}
+                      >
+                        <label className="select-box" onClick={(event) => event.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.includes(item.id)}
+                            onChange={() => toggleSelected(item.id)}
+                          />
+                        </label>
+                        <button type="button" className="queue-main" onClick={() => setSelectedId(item.id)}>
+                          <span className="queue-title">
+                            <strong>{item.poiType}</strong>
+                            <small>{statusLabel(item.status)}</small>
+                          </span>
+                          <span className="queue-line">{item.poiHash}</span>
+                          <span className="queue-line">{formatUserSummary(item)} · {formatBytes(item.sizeBytes)}</span>
+                          <span className="queue-time">{formatAuditSummary(item)}</span>
+                          {item.moderationNote && <small className="queue-note">{item.moderationNote}</small>}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
+            </div>
           )}
         </section>
         <section className="inspector">
@@ -373,6 +542,8 @@ export default function App() {
                 <div><span>Pixels</span><strong>{formatPixels(selected, imagePixels)}</strong></div>
                 <div><span>MIME</span><strong>{selected.mimeType || '-'}</strong></div>
                 <div><span>Size</span><strong>{formatBytes(selected.sizeBytes)}</strong></div>
+                <div><span>Created</span><strong>{formatAuditTime(selected.createdAt)}</strong></div>
+                <div><span>Updated</span><strong>{formatAuditTime(selected.updatedAt)}</strong></div>
               </div>
               <div className="link-row">
                 <a href={pointShareUrl(selected.poiHash)} target="_blank" rel="noreferrer">Open point in frontend</a>
@@ -386,6 +557,15 @@ export default function App() {
                 placeholder="Moderator note"
               />
               <div className="actions">
+                {selected.status === 'pending_openai' && (
+                  <button
+                    type="button"
+                    onClick={() => void sendCurrentToAi()}
+                    disabled={Boolean(busyAction)}
+                  >
+                    {busyAction?.id === '__ai__' ? 'Sending to AI...' : 'Send to AI Review'}
+                  </button>
+                )}
                 {STATUS_TRANSITIONS[selected.status].map((status) => (
                   <button
                     key={status}
@@ -453,6 +633,26 @@ function formatPixels(
   return `${width} x ${height}`;
 }
 
+function formatAuditSummary(item: PendingSubmission): string {
+  return `Created ${formatAuditTime(item.createdAt)} · Updated ${formatAuditTime(item.updatedAt)}`;
+}
+
+function formatAuditTime(value: string | null | undefined): string {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return value;
+
+  return new Intl.DateTimeFormat(undefined, {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(date);
+}
+
 function formatUserSummary(item: PendingSubmission): string {
   const userNo = item.submitter?.publicUid ?? item.userId;
   const group = item.submitter?.role ?? '-';
@@ -468,7 +668,7 @@ function pointShareUrl(hash: string): string {
 
 function isAdminRole(role: string | undefined): boolean {
   const normalized = role?.trim().toLowerCase();
-  return normalized === 'a' || normalized === 'admin';
+  return normalized === 'a' || normalized === 'admin' || normalized === 'r' || normalized === 'robot';
 }
 
 function statusLabel(status: ModerationStatus): string {
@@ -480,6 +680,8 @@ type StateActionContext = {
   selectedVisibleItems: PendingSubmission[];
   loading: boolean;
   updateMany: (targets: PendingSubmission[], status: ModerationStatus, label?: string) => Promise<void>;
+  sendSelectedToAi: (targets: PendingSubmission[]) => Promise<void>;
+  aiBusy: boolean;
 };
 
 function renderStateActions(context: StateActionContext): React.ReactNode {
@@ -488,8 +690,10 @@ function renderStateActions(context: StateActionContext): React.ReactNode {
     selectedVisibleItems,
     loading,
     updateMany,
+    sendSelectedToAi,
+    aiBusy,
   } = context;
-  const selectedDisabled = loading || selectedVisibleItems.length === 0;
+  const selectedDisabled = loading || selectedVisibleItems.length === 0 || aiBusy;
 
   if (statusFilter === 'all') {
     return null;
@@ -498,6 +702,9 @@ function renderStateActions(context: StateActionContext): React.ReactNode {
   if (statusFilter === 'pending_openai') {
     return (
       <>
+        <button type="button" onClick={() => void sendSelectedToAi(selectedVisibleItems)} disabled={selectedDisabled}>
+          {aiBusy ? 'Sending to AI...' : 'Send Selected to AI Review'}
+        </button>
         <button type="button" onClick={() => void updateMany(selectedVisibleItems, 'pending_audit', 'pending audit selected')} disabled={selectedDisabled}>Pending Audit Selected</button>
         <button type="button" className="danger-ghost" onClick={() => void updateMany(selectedVisibleItems, 'stale', 'stale selected')} disabled={selectedDisabled}>Stale Selected</button>
       </>

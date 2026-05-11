@@ -61,7 +61,12 @@ export class ApiClientError extends Error {
   }
 }
 
-export const API_BASE = (import.meta.env.VITE_API_BASE || defaultApiBase()).replace(/\/$/, '');
+const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1']);
+const LOCAL_API_BASE = 'http://localhost:8787';
+const PROD_API_BASE = 'https://api.opendfieldmap.org';
+const ADMIN_HOSTNAME = 'admin.opendfieldmap.org';
+
+export const API_BASE = resolveApiBase().replace(/\/$/, '');
 
 export async function getSession(): Promise<AdminUser | null> {
   const response = await fetch(`${API_BASE}/auth/v1/session`, {
@@ -147,7 +152,7 @@ export async function deleteStaleImages(): Promise<{ deletedObjects: number; del
 }
 
 export async function runModerationOnce(): Promise<number> {
-  const response = await fetch(`${API_BASE}/moderation/v1/run-once`, {
+  const response = await fetch(`${API_BASE}/moderation/v1/run`, {
     method: 'POST',
     credentials: 'include',
   });
@@ -157,7 +162,7 @@ export async function runModerationOnce(): Promise<number> {
 }
 
 export async function runModerationSelected(ids: string[]): Promise<number> {
-  const response = await fetch(`${API_BASE}/moderation/v1/run-selected`, {
+  const response = await fetch(`${API_BASE}/moderation/v1/run`, {
     method: 'POST',
     credentials: 'include',
     headers: {
@@ -178,11 +183,35 @@ export async function fetchImageBlobUrl(filePath: string): Promise<string> {
   return URL.createObjectURL(await response.blob());
 }
 
-function defaultApiBase(): string {
-  if (import.meta.env.PROD) {
-    return 'https://api.opendfieldmap.org';
+function resolveApiBase(): string {
+  const hostname = currentHostname();
+
+  if (LOCAL_HOSTNAMES.has(hostname)) {
+    return LOCAL_API_BASE;
   }
-  return 'http://localhost:8787';
+
+  if (hostname === ADMIN_HOSTNAME) {
+    return PROD_API_BASE;
+  }
+
+  const configured = import.meta.env.VITE_API_BASE?.trim();
+  if (configured) {
+    return configured;
+  }
+
+  if (import.meta.env.PROD) {
+    return PROD_API_BASE;
+  }
+
+  return LOCAL_API_BASE;
+}
+
+function currentHostname(): string {
+  if (typeof window === 'undefined') {
+    return '';
+  }
+
+  return window.location.hostname.trim().toLowerCase();
 }
 
 async function toApiError(response: Response): Promise<ApiClientError> {

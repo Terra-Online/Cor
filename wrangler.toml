@@ -1,3 +1,12 @@
-name = "cor-admin"
-compatibility_date = "2026-05-07"
-pages_build_output_dir = "dist"
+name = "oem-audit"
+compatibility_date = "2026-05-08"
+workers_dev = false
+preview_urls = false
+
+[assets]
+directory = "./dist"
+not_found_handling = "single-page-application"
+
+[[routes]]
+pattern = "admin.opendfieldmap.org"
+custom_domain = true
