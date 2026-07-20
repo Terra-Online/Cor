@@ -1,15 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  MODERATION_DATE_FETCH_LIMIT,
   MODERATION_STATUSES,
   type AdminUser,
+  type DuplicateImageMarker,
   type ModerationStatus,
   type PendingSubmission,
+  type ReviewSubmissionStats,
+  type SubmissionImage,
   deleteStaleImages,
   deleteTestImages,
   fetchImageBlobUrl,
   getSession,
+  listDuplicateImageMarkers,
+  listDuplicateMarkerImages,
   listPendingSubmissions,
-  runModerationOnce,
   runModerationSelected,
   startGoogleSignIn,
   updateSubmissionStatus,
@@ -41,6 +46,16 @@ const STATUS_TRANSITIONS: Record<ModerationStatus, ModerationStatus[]> = {
 const MANUAL_QUEUE_STATUSES = new Set<ModerationStatus>(['pending_audit', 'flagged', 'remove_request']);
 const REVIEWED_STATUSES = new Set<ModerationStatus>(['active', 'stale']);
 
+type DateRangePreset = 'today' | '7d' | '30d' | 'custom';
+type AdminView = 'review' | 'duplicates';
+
+const DATE_RANGE_PRESETS: { value: DateRangePreset; label: string }[] = [
+  { value: 'today', label: 'Today' },
+  { value: '7d', label: '7 days' },
+  { value: '30d', label: '30 days' },
+  { value: 'custom', label: 'Custom' },
+];
+
 export default function App() {
   const [access, setAccess] = useState<AccessState>({ status: 'loading' });
   const [items, setItems] = useState<PendingSubmission[]>([]);
@@ -52,13 +67,31 @@ export default function App() {
   const [signInBusy, setSignInBusy] = useState(false);
   const [imagePreview, setImagePreview] = useState<{ id: string; url: string } | null>(null);
   const [imageError, setImageError] = useState<string | null>(null);
-  const [imagePixels, setImagePixels] = useState<{ id: string; width: number; height: number } | null>(null);
   const [statusFilter, setStatusFilter] = useState<ModerationStatus | 'all'>('all');
+  const [commentsOnly, setCommentsOnly] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [dateRangePreset, setDateRangePreset] = useState<DateRangePreset>('7d');
+  const [customDateRange, setCustomDateRange] = useState(() => defaultDateRange());
+  const [serverStats, setServerStats] = useState<ReviewSubmissionStats | null>(null);
+  const [resultLimit, setResultLimit] = useState(MODERATION_DATE_FETCH_LIMIT);
+  const [activeView, setActiveView] = useState<AdminView>(() => initialView());
+  const [duplicateMarkers, setDuplicateMarkers] = useState<DuplicateImageMarker[]>([]);
+  const [duplicateTotal, setDuplicateTotal] = useState(0);
+  const [duplicateLoading, setDuplicateLoading] = useState(false);
+  const [selectedDuplicateMarkerId, setSelectedDuplicateMarkerId] = useState<string | null>(() => initialDuplicateMarker());
+  const [duplicateImages, setDuplicateImages] = useState<SubmissionImage[]>([]);
+  const [duplicateImageTotal, setDuplicateImageTotal] = useState(0);
+  const queryDateRange = useMemo(
+    () => resolveDateRange(dateRangePreset, customDateRange),
+    [customDateRange, dateRangePreset],
+  );
 
   const visibleItems = useMemo(
-    () => statusFilter === 'all' ? items : items.filter((item) => item.status === statusFilter),
-    [items, statusFilter],
+    () => items.filter((item) => (
+      (statusFilter === 'all' || item.status === statusFilter)
+      && (!commentsOnly || item.kind === 'comment')
+    )),
+    [commentsOnly, items, statusFilter],
   );
   const selected = useMemo(
     () => visibleItems.find((item) => item.id === selectedId) ?? visibleItems[0] ?? null,
@@ -83,16 +116,32 @@ export default function App() {
   const statusCounts = useMemo(() => Object.fromEntries(
     MODERATION_STATUSES.map((status) => [
       status,
-      items.filter((item) => item.status === status).length,
+      serverStats?.byStatus.find((entry) => entry.status === status)?.count
+        ?? items.filter((item) => item.status === status).length,
     ]),
-  ) as Record<ModerationStatus, number>, [items]);
+  ) as Record<ModerationStatus, number>, [items, serverStats]);
+  const uploadStats = useMemo(
+    () => buildUploadStats(items, queryDateRange, serverStats),
+    [items, queryDateRange, serverStats],
+  );
+  const selectedDuplicateMarker = useMemo(
+    () => duplicateMarkers.find((item) => item.markerId === selectedDuplicateMarkerId) ?? duplicateMarkers[0] ?? null,
+    [duplicateMarkers, selectedDuplicateMarkerId],
+  );
 
   const refresh = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const pending = await listPendingSubmissions();
+      const result = await listPendingSubmissions({
+        from: queryDateRange.startDate.toISOString(),
+        to: queryDateRange.endDate.toISOString(),
+        limit: MODERATION_DATE_FETCH_LIMIT,
+      });
+      const pending = result.items;
       setItems(pending);
+      setServerStats(result.stats);
+      setResultLimit(result.limit);
       setSelectedIds((current) => current.filter((id) => pending.some((item) => item.id === id)));
       setSelectedId((current) => {
         if (current && pending.some((item) => item.id === current)) return current;
@@ -102,6 +151,24 @@ export default function App() {
       setError(err instanceof Error ? err.message : 'Failed to load moderation queue.');
     } finally {
       setLoading(false);
+    }
+  }, [queryDateRange]);
+
+  const refreshDuplicates = useCallback(async () => {
+    setDuplicateLoading(true);
+    setError(null);
+    try {
+      const result = await listDuplicateImageMarkers({ limit: 50 });
+      setDuplicateMarkers(result.items);
+      setDuplicateTotal(result.total);
+      setSelectedDuplicateMarkerId((current) => {
+        if (current && result.items.some((item) => item.markerId === current)) return current;
+        return result.items[0]?.markerId ?? current ?? null;
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load duplicate image markers.');
+    } finally {
+      setDuplicateLoading(false);
     }
   }, []);
 
@@ -142,7 +209,6 @@ export default function App() {
           return;
         }
         setAccess({ status: 'ready', user });
-        void refresh();
       })
       .catch((err) => {
         if (!disposed) {
@@ -155,13 +221,56 @@ export default function App() {
     return () => {
       disposed = true;
     };
-  }, [refresh]);
+  }, []);
+
+  useEffect(() => {
+    if (access.status !== 'ready') return;
+    void refresh();
+  }, [access.status, refresh]);
+
+  useEffect(() => {
+    if (access.status !== 'ready' || activeView !== 'duplicates') return;
+    void refreshDuplicates();
+  }, [access.status, activeView, refreshDuplicates]);
+
+  useEffect(() => {
+    if (access.status !== 'ready' || activeView !== 'duplicates' || !selectedDuplicateMarkerId) {
+      setDuplicateImages([]);
+      setDuplicateImageTotal(0);
+      return;
+    }
+
+    let disposed = false;
+    setDuplicateLoading(true);
+    setError(null);
+    void listDuplicateMarkerImages(selectedDuplicateMarkerId, { limit: 100 })
+      .then((result) => {
+        if (disposed) return;
+        setDuplicateImages(result.items);
+        setDuplicateImageTotal(result.total);
+      })
+      .catch((err) => {
+        if (!disposed) {
+          setError(err instanceof Error ? err.message : 'Failed to load duplicate marker images.');
+          setDuplicateImages([]);
+          setDuplicateImageTotal(0);
+        }
+      })
+      .finally(() => {
+        if (!disposed) {
+          setDuplicateLoading(false);
+        }
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, [access.status, activeView, selectedDuplicateMarkerId]);
 
   useEffect(() => {
     setImagePreview(null);
     setImageError(null);
-    setImagePixels(null);
-    if (!selected) return undefined;
+    if (!selected || selected.kind !== 'image' || !selected.filePath) return undefined;
 
     let disposed = false;
     let objectUrl: string | null = null;
@@ -341,62 +450,153 @@ export default function App() {
       user={access.user}
       actions={(
         <>
-          <button type="button" onClick={() => void refresh()} disabled={loading}>Refresh</button>
           <button
             type="button"
-            onClick={() => {
-              setLoading(true);
-              setBusyAction({ id: '__ai__', status: 'pending_openai' });
-              setError(null);
-              void runModerationOnce()
-                .then(async (processed) => {
-                  await refresh();
-                  setError(`Sent queue to AI review, processed ${processed}.`);
-                })
-                .catch((err) => {
-                  setError(err instanceof Error ? err.message : 'Failed to run AI review.');
-                })
-                .finally(() => {
-                  setBusyAction(null);
-                  setLoading(false);
-                });
-            }}
-            disabled={loading || busyAction?.id === '__ai__'}
+            className="icon-button"
+            onClick={() => void refresh()}
+            disabled={loading}
+            aria-label="Refresh"
+            title="Refresh"
           >
-            {busyAction?.id === '__ai__' ? 'Sending to AI...' : 'Run AI Review'}
+            <RefreshIcon />
+          </button>
+          <button
+            type="button"
+            className={activeView === 'review' ? 'view-tab active' : 'view-tab'}
+            onClick={() => setActiveView('review')}
+          >
+            Review
+          </button>
+          <button
+            type="button"
+            className={activeView === 'duplicates' ? 'view-tab active' : 'view-tab'}
+            onClick={() => setActiveView('duplicates')}
+          >
+            Duplicate Images
           </button>
           <button type="button" className="danger-ghost" onClick={() => void clearStaleImages()} disabled={loading}>Delete Stale</button>
           <button type="button" className="danger-ghost" onClick={() => void clearTestImages()} disabled={loading}>Delete _test</button>
+          {activeView === 'review' && (
+            <button
+              type="button"
+              className={commentsOnly ? 'comment-filter active' : 'comment-filter'}
+              aria-pressed={commentsOnly}
+              onClick={() => setCommentsOnly((current) => !current)}
+            >
+              Comments only
+            </button>
+          )}
         </>
       )}
     >
       {error && <div className="error">{error}</div>}
-      <section className="status-strip">
-        <button
-          type="button"
-          className={statusFilter === 'all' ? 'status-chip active' : 'status-chip'}
-          onClick={() => setStatusFilter('all')}
-        >
-          <span>All</span>
-          <strong>{items.length}</strong>
-        </button>
-        {MODERATION_STATUSES.map((status) => (
+      {activeView === 'review' ? (
+        <>
+          <section className="status-strip">
+            <button
+              type="button"
+              className={statusFilter === 'all' ? 'status-chip active' : 'status-chip'}
+              onClick={() => setStatusFilter('all')}
+            >
+              <span>All</span>
+              <strong>{uploadStats.total}</strong>
+            </button>
+            {MODERATION_STATUSES.map((status) => (
+              <button
+                key={status}
+                type="button"
+                className={statusFilter === status ? 'status-chip active' : 'status-chip'}
+                onClick={() => setStatusFilter(statusFilter === status ? 'all' : status)}
+              >
+                <span>{statusLabel(status)}</span>
+                <strong>{statusCounts[status]}</strong>
+              </button>
+            ))}
+          </section>
+          <section className="stats-panel">
+            <div className="stats-controls">
+              <div>
+                <h2>Uploads</h2>
+                <p>
+                  {formatDateRangeLabel(uploadStats.startDate, uploadStats.endDate)}
+                  {' '}loaded {items.length} of {uploadStats.total}
+                  {uploadStats.total > resultLimit ? `, capped at ${resultLimit}` : ''}
+                </p>
+              </div>
+              <div className="date-tabs" role="group" aria-label="Date range">
+                {DATE_RANGE_PRESETS.map((preset) => (
+                  <button
+                    key={preset.value}
+                    type="button"
+                    className={dateRangePreset === preset.value ? 'date-tab active' : 'date-tab'}
+                    onClick={() => setDateRangePreset(preset.value)}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+              <div className="date-inputs">
+                <label>
+                  <span>From</span>
+                  <input
+                    type="date"
+                    value={customDateRange.start}
+                    onChange={(event) => {
+                      setDateRangePreset('custom');
+                      setCustomDateRange((current) => ({ ...current, start: event.target.value }));
+                    }}
+                  />
+                </label>
+                <label>
+                  <span>To</span>
+                  <input
+                    type="date"
+                    value={customDateRange.end}
+                    onChange={(event) => {
+                      setDateRangePreset('custom');
+                      setCustomDateRange((current) => ({ ...current, end: event.target.value }));
+                    }}
+                  />
+                </label>
+              </div>
+            </div>
+            <div className="stats-summary">
+              <div className="stats-total">
+                <span>Total uploads</span>
+                <strong>{uploadStats.total}</strong>
+              </div>
+              <div className="stats-breakdown">
+                {uploadStats.byType.map((entry) => (
+                  <div key={entry.type} className="stats-row">
+                    <span>{entry.type}</span>
+                    <strong>{entry.count}</strong>
+                  </div>
+                ))}
+                {uploadStats.byType.length === 0 && <div className="stats-empty">No uploads in this range.</div>}
+              </div>
+            </div>
+          </section>
+        </>
+      ) : (
+        <section className="duplicate-summary-panel">
+          <div>
+            <h2>Duplicate Image Markers</h2>
+            <p>{duplicateMarkers.length} loaded of {duplicateTotal} markers with more than one visible image.</p>
+          </div>
           <button
-            key={status}
             type="button"
-            className={statusFilter === status ? 'status-chip active' : 'status-chip'}
-            onClick={() => setStatusFilter(statusFilter === status ? 'all' : status)}
+            onClick={() => void refreshDuplicates()}
+            disabled={duplicateLoading}
           >
-            <span>{statusLabel(status)}</span>
-            <strong>{statusCounts[status]}</strong>
+            {duplicateLoading ? 'Loading...' : 'Refresh Duplicates'}
           </button>
-        ))}
-      </section>
-      <section className="state-actions">
+        </section>
+      )}
+      {activeView === 'review' && <section className="state-actions">
         <div className="state-action-buttons">{stateActions}</div>
-        <strong>{selectedVisibleItems.length} selected / {visibleItems.length} visible / {items.length} total</strong>
-      </section>
-      <main className="review-layout">
+        <strong>{selectedVisibleItems.length} selected / {visibleItems.length} visible / {uploadStats.total} total</strong>
+      </section>}
+      {activeView === 'review' ? <main className="review-layout">
         <section className="queue">
           <div className="queue-controls">
             <button type="button" onClick={selectVisible} disabled={visibleItems.length === 0}>Select All</button>
@@ -429,11 +629,17 @@ export default function App() {
                         </label>
                         <button type="button" className="queue-main" onClick={() => setSelectedId(item.id)}>
                           <span className="queue-title">
-                            <strong>{item.poiType}</strong>
-                            <small>{statusLabel(item.status)}</small>
+                            <strong>{formatItemTitle(item)}</strong>
+                            <small>{formatKindStatus(item)}</small>
                           </span>
                           <span className="queue-line">{item.poiHash}</span>
-                          <span className="queue-line">{formatUserSummary(item)} · {formatBytes(item.sizeBytes)}</span>
+                          <span className="queue-line">{formatQueueDetail(item)}</span>
+                          {item.kind === 'image' && (
+                            <span className="queue-flag-count">Flags {formatFlagCount(item.flagCount)}</span>
+                          )}
+                          {item.kind === 'comment' && item.content && (
+                            <span className="queue-content">{item.content}</span>
+                          )}
                           <span className="queue-time">{formatAuditSummary(item)}</span>
                           {item.moderationNote && <small className="queue-note">{item.moderationNote}</small>}
                         </button>
@@ -463,11 +669,17 @@ export default function App() {
                         </label>
                         <button type="button" className="queue-main" onClick={() => setSelectedId(item.id)}>
                           <span className="queue-title">
-                            <strong>{item.poiType}</strong>
-                            <small>{statusLabel(item.status)}</small>
+                            <strong>{formatItemTitle(item)}</strong>
+                            <small>{formatKindStatus(item)}</small>
                           </span>
                           <span className="queue-line">{item.poiHash}</span>
-                          <span className="queue-line">{formatUserSummary(item)} · {formatBytes(item.sizeBytes)}</span>
+                          <span className="queue-line">{formatQueueDetail(item)}</span>
+                          {item.kind === 'image' && (
+                            <span className="queue-flag-count">Flags {formatFlagCount(item.flagCount)}</span>
+                          )}
+                          {item.kind === 'comment' && item.content && (
+                            <span className="queue-content">{item.content}</span>
+                          )}
                           <span className="queue-time">{formatAuditSummary(item)}</span>
                           {item.moderationNote && <small className="queue-note">{item.moderationNote}</small>}
                         </button>
@@ -497,11 +709,17 @@ export default function App() {
                         </label>
                         <button type="button" className="queue-main" onClick={() => setSelectedId(item.id)}>
                           <span className="queue-title">
-                            <strong>{item.poiType}</strong>
-                            <small>{statusLabel(item.status)}</small>
+                            <strong>{formatItemTitle(item)}</strong>
+                            <small>{formatKindStatus(item)}</small>
                           </span>
                           <span className="queue-line">{item.poiHash}</span>
-                          <span className="queue-line">{formatUserSummary(item)} · {formatBytes(item.sizeBytes)}</span>
+                          <span className="queue-line">{formatQueueDetail(item)}</span>
+                          {item.kind === 'image' && (
+                            <span className="queue-flag-count">Flags {formatFlagCount(item.flagCount)}</span>
+                          )}
+                          {item.kind === 'comment' && item.content && (
+                            <span className="queue-content">{item.content}</span>
+                          )}
                           <span className="queue-time">{formatAuditSummary(item)}</span>
                           {item.moderationNote && <small className="queue-note">{item.moderationNote}</small>}
                         </button>
@@ -516,32 +734,43 @@ export default function App() {
         <section className="inspector">
           {selected ? (
             <>
-              <div className="image-frame">
-                {imagePreview?.id === selected.id ? (
-                  <img
-                    src={imagePreview.url}
-                    alt={selected.content || selected.poiType}
-                    onLoad={(event) => {
-                      setImagePixels({
-                        id: selected.id,
-                        width: event.currentTarget.naturalWidth,
-                        height: event.currentTarget.naturalHeight,
-                      });
-                    }}
-                  />
-                ) : (
-                  <div className="image-placeholder">{imageError ?? 'Loading image...'}</div>
-                )}
-              </div>
+              {selected.kind === 'image' ? (
+                <div className="image-frame">
+                  {imagePreview?.id === selected.id ? (
+	                    <img
+	                      src={imagePreview.url}
+	                      alt={selected.content || selected.poiType}
+	                    />
+                  ) : (
+                    <div className="image-placeholder">{imageError ?? 'Loading image...'}</div>
+                  )}
+                </div>
+              ) : (
+                <div className="text-frame">
+                  <span>Comment</span>
+                  <p>{selected.content || 'No text content returned.'}</p>
+                </div>
+              )}
               <div className="meta-grid">
+                <div><span>Kind</span><strong>{selected.kind}</strong></div>
                 <div><span>Snapshot</span><strong>{selected.snapshotId}</strong></div>
                 <div><span>POI</span><strong>{selected.markerId}</strong></div>
                 <div><span>Status</span><strong>{statusLabel(selected.status)}</strong></div>
+                {selected.kind === 'image' && (
+                  <>
+                    <div><span>Flags</span><strong>{formatFlagCount(selected.flagCount)}</strong></div>
+                    <div><span>MIME</span><strong>{selected.mimeType || '-'}</strong></div>
+                    <div><span>Size</span><strong>{formatBytes(selected.sizeBytes)}</strong></div>
+                  </>
+                )}
                 <div><span>Type</span><strong>{selected.poiType}</strong></div>
                 <div><span>User</span><strong>{formatUserSummary(selected)}</strong></div>
-                <div><span>Pixels</span><strong>{formatPixels(selected, imagePixels)}</strong></div>
-                <div><span>MIME</span><strong>{selected.mimeType || '-'}</strong></div>
-                <div><span>Size</span><strong>{formatBytes(selected.sizeBytes)}</strong></div>
+                {selected.kind === 'comment' && (
+                  <>
+                    <div><span>Parent</span><strong>{selected.parentId || '-'}</strong></div>
+                    <div><span>Depth</span><strong>{selected.commentDepth}</strong></div>
+                  </>
+                )}
                 <div><span>Created</span><strong>{formatAuditTime(selected.createdAt)}</strong></div>
                 <div><span>Updated</span><strong>{formatAuditTime(selected.updatedAt)}</strong></div>
               </div>
@@ -583,7 +812,66 @@ export default function App() {
             <div className="empty">Select an item.</div>
           )}
         </section>
-      </main>
+      </main> : (
+        <main className="review-layout duplicate-layout">
+          <section className="queue">
+            {duplicateLoading && duplicateMarkers.length === 0 ? (
+              <div className="empty">Loading duplicate markers...</div>
+            ) : duplicateMarkers.length === 0 ? (
+              <div className="empty">No duplicate image markers.</div>
+            ) : (
+              <div className="queue-items">
+                {duplicateMarkers.map((item) => (
+                  <button
+                    key={item.markerId}
+                    type="button"
+                    className={item.markerId === selectedDuplicateMarker?.markerId ? 'duplicate-marker active' : 'duplicate-marker'}
+                    onClick={() => setSelectedDuplicateMarkerId(item.markerId)}
+                  >
+                    <span className="queue-title">
+                      <strong>{item.poiType || 'unknown'}</strong>
+                      <small>{item.imageCount} images</small>
+                    </span>
+                    <span className="queue-line">{item.markerId}</span>
+                    <span className="queue-line">{item.poiHash}</span>
+                    <span className="queue-time">Latest {formatAuditTime(item.latestCreatedAt)}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </section>
+          <section className="inspector">
+            {selectedDuplicateMarker ? (
+              <>
+                <div className="duplicate-head">
+                  <div>
+                    <h2>{selectedDuplicateMarker.poiType || 'unknown'}</h2>
+                    <p>{selectedDuplicateMarker.markerId} · {duplicateImageTotal} images</p>
+                  </div>
+                  <a href={pointShareUrl(selectedDuplicateMarker.poiHash)} target="_blank" rel="noreferrer">Open point</a>
+                </div>
+                <div className="duplicate-grid">
+                  {duplicateImages.map((image) => (
+                    <article key={image.id} className="duplicate-image-card">
+                      <img src={image.url} alt={image.content || selectedDuplicateMarker.poiType || image.id} loading="lazy" />
+                      <div>
+                        <strong>{statusLabel(image.status)}</strong>
+                        <span>{formatAuditTime(image.createdAt)}</span>
+                        <span>{image.author ? `${image.author.nickname} / ${image.author.publicUid}` : 'Unknown author'}</span>
+                        <span className="duplicate-flag-count">Flags {formatFlagCount(image.flagCount)}</span>
+                        {image.content && <p>{image.content}</p>}
+                      </div>
+                    </article>
+                  ))}
+                  {duplicateImages.length === 0 && <div className="empty">No visible images for this marker.</div>}
+                </div>
+              </>
+            ) : (
+              <div className="empty">Select a duplicate marker.</div>
+            )}
+          </section>
+        </main>
+      )}
     </Shell>
   );
 }
@@ -623,16 +911,6 @@ function formatBytes(value: number | null): string {
   return `${(value / 1024 / 1024).toFixed(2)} MB`;
 }
 
-function formatPixels(
-  item: PendingSubmission,
-  imagePixels: { id: string; width: number; height: number } | null,
-): string {
-  const width = imagePixels?.id === item.id ? imagePixels.width : null;
-  const height = imagePixels?.id === item.id ? imagePixels.height : null;
-  if (!width || !height) return '-';
-  return `${width} x ${height}`;
-}
-
 function formatAuditSummary(item: PendingSubmission): string {
   return `Created ${formatAuditTime(item.createdAt)} · Updated ${formatAuditTime(item.updatedAt)}`;
 }
@@ -653,6 +931,141 @@ function formatAuditTime(value: string | null | undefined): string {
   }).format(date);
 }
 
+function buildUploadStats(
+  items: PendingSubmission[],
+  dateRange: { startDate: Date; endDate: Date },
+  serverStats: ReviewSubmissionStats | null,
+): {
+  startDate: Date;
+  endDate: Date;
+  total: number;
+  byType: { type: string; count: number }[];
+} {
+  const { startDate, endDate } = dateRange;
+  if (serverStats) {
+    return {
+      startDate,
+      endDate,
+      total: serverStats.total,
+      byType: serverStats.byType,
+    };
+  }
+
+  const typeCounts = new Map<string, number>();
+  let total = 0;
+
+  for (const item of items) {
+    const createdAt = new Date(item.createdAt);
+    const timestamp = createdAt.getTime();
+    if (!Number.isFinite(timestamp) || timestamp < startDate.getTime() || timestamp > endDate.getTime()) {
+      continue;
+    }
+
+    const type = item.poiType || 'unknown';
+    typeCounts.set(type, (typeCounts.get(type) ?? 0) + 1);
+    total += 1;
+  }
+
+  const byType = [...typeCounts.entries()]
+    .map(([type, count]) => ({ type, count }))
+    .sort((a, b) => b.count - a.count || a.type.localeCompare(b.type));
+
+  return { startDate, endDate, total, byType };
+}
+
+function resolveDateRange(
+  preset: DateRangePreset,
+  customDateRange: { start: string; end: string },
+): { startDate: Date; endDate: Date } {
+  if (preset === 'custom') {
+    const fallback = defaultDateRange();
+    return normalizeDateRange(
+      parseDateInput(customDateRange.start, false) ?? parseDateInput(fallback.start, false) ?? startOfToday(),
+      parseDateInput(customDateRange.end, true) ?? parseDateInput(fallback.end, true) ?? endOfToday(),
+    );
+  }
+
+  const endDate = endOfToday();
+  if (preset === 'today') {
+    return { startDate: startOfToday(), endDate };
+  }
+
+  const days = preset === '30d' ? 30 : 7;
+  const startDate = startOfToday();
+  startDate.setDate(startDate.getDate() - days + 1);
+  return { startDate, endDate };
+}
+
+function normalizeDateRange(startDate: Date, endDate: Date): { startDate: Date; endDate: Date } {
+  if (startDate.getTime() <= endDate.getTime()) {
+    return { startDate, endDate };
+  }
+  return { startDate: startOfDay(endDate), endDate: endOfDay(startDate) };
+}
+
+function defaultDateRange(): { start: string; end: string } {
+  const end = startOfToday();
+  const start = startOfToday();
+  start.setDate(start.getDate() - 6);
+  return {
+    start: toDateInputValue(start),
+    end: toDateInputValue(end),
+  };
+}
+
+function parseDateInput(value: string, endOfDate: boolean): Date | null {
+  if (!value) return null;
+  const [yearText, monthText, dayText] = value.split('-');
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  if (!year || !month || !day) return null;
+  const date = new Date(year, month - 1, day);
+  if (!Number.isFinite(date.getTime())) return null;
+  return endOfDate ? endOfDay(date) : startOfDay(date);
+}
+
+function startOfToday(): Date {
+  return startOfDay(new Date());
+}
+
+function endOfToday(): Date {
+  return endOfDay(new Date());
+}
+
+function startOfDay(value: Date): Date {
+  return new Date(value.getFullYear(), value.getMonth(), value.getDate(), 0, 0, 0, 0);
+}
+
+function endOfDay(value: Date): Date {
+  return new Date(value.getFullYear(), value.getMonth(), value.getDate(), 23, 59, 59, 999);
+}
+
+function toDateInputValue(value: Date): string {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function formatDateRangeLabel(startDate: Date, endDate: Date): string {
+  const formatter = new Intl.DateTimeFormat(undefined, {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  return `${formatter.format(startDate)} - ${formatter.format(endDate)}`;
+}
+
+function initialDuplicateMarker(): string | null {
+  if (typeof window === 'undefined') return null;
+  return new URLSearchParams(window.location.search).get('duplicateMarker');
+}
+
+function initialView(): AdminView {
+  return initialDuplicateMarker() ? 'duplicates' : 'review';
+}
+
 function formatUserSummary(item: PendingSubmission): string {
   const userNo = item.submitter?.publicUid ?? item.userId;
   const group = item.submitter?.role ?? '-';
@@ -660,6 +1073,26 @@ function formatUserSummary(item: PendingSubmission): string {
     ? item.submitter.karma
     : '-';
   return `${userNo} / ${group} / K${karma}`;
+}
+
+function formatItemTitle(item: PendingSubmission): string {
+  return item.poiType || (item.kind === 'comment' ? 'Comment' : 'Image');
+}
+
+function formatKindStatus(item: PendingSubmission): string {
+  return `${item.kind} / ${statusLabel(item.status)}`;
+}
+
+function formatQueueDetail(item: PendingSubmission): string {
+  const detail = item.kind === 'image'
+    ? formatBytes(item.sizeBytes)
+    : `${Math.max(0, item.content?.length ?? 0)} chars`;
+  return `${formatUserSummary(item)} · ${detail}`;
+}
+
+function formatFlagCount(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '-';
+  return String(Math.max(0, Math.floor(value)));
 }
 
 function pointShareUrl(hash: string): string {
@@ -749,4 +1182,25 @@ function actionLabel(status: ModerationStatus): string {
   if (status === 'pending_audit') return 'Send to audit';
   if (status === 'stale') return 'Move to stale';
   return `Move to ${statusLabel(status)}`;
+}
+
+function RefreshIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      width="18"
+      height="18"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M21 12a9 9 0 0 1-15.4 6.4L3 16" />
+      <path d="M3 21v-5h5" />
+      <path d="M3 12A9 9 0 0 1 18.4 5.6L21 8" />
+      <path d="M21 3v5h-5" />
+    </svg>
+  );
 }
