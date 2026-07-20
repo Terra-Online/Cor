@@ -4,6 +4,7 @@ import {
   MODERATION_STATUSES,
   type AdminUser,
   type DuplicateImageMarker,
+  type ImageCoverageReport,
   type ModerationStatus,
   type PendingSubmission,
   type ReviewSubmissionStats,
@@ -11,6 +12,7 @@ import {
   deleteStaleImages,
   deleteTestImages,
   fetchImageBlobUrl,
+  getImageCoverage,
   getSession,
   listDuplicateImageMarkers,
   listDuplicateMarkerImages,
@@ -19,6 +21,7 @@ import {
   startGoogleSignIn,
   updateSubmissionStatus,
 } from './api';
+import ImageCoverageView, { type CoverageRegionFilter } from './ImageCoverageView';
 import './styles.css';
 
 type AccessState =
@@ -47,7 +50,7 @@ const MANUAL_QUEUE_STATUSES = new Set<ModerationStatus>(['pending_audit', 'flagg
 const REVIEWED_STATUSES = new Set<ModerationStatus>(['active', 'stale']);
 
 type DateRangePreset = 'today' | '7d' | '30d' | 'custom';
-type AdminView = 'review' | 'duplicates';
+type AdminView = 'review' | 'duplicates' | 'coverage';
 
 const DATE_RANGE_PRESETS: { value: DateRangePreset; label: string }[] = [
   { value: 'today', label: 'Today' },
@@ -81,6 +84,9 @@ export default function App() {
   const [selectedDuplicateMarkerId, setSelectedDuplicateMarkerId] = useState<string | null>(() => initialDuplicateMarker());
   const [duplicateImages, setDuplicateImages] = useState<SubmissionImage[]>([]);
   const [duplicateImageTotal, setDuplicateImageTotal] = useState(0);
+  const [coverageReport, setCoverageReport] = useState<ImageCoverageReport | null>(null);
+  const [coverageLoading, setCoverageLoading] = useState(false);
+  const [coverageRegion, setCoverageRegion] = useState<CoverageRegionFilter>('all');
   const queryDateRange = useMemo(
     () => resolveDateRange(dateRangePreset, customDateRange),
     [customDateRange, dateRangePreset],
@@ -172,6 +178,18 @@ export default function App() {
     }
   }, []);
 
+  const refreshCoverage = useCallback(async () => {
+    setCoverageLoading(true);
+    setError(null);
+    try {
+      setCoverageReport(await getImageCoverage());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load image coverage.');
+    } finally {
+      setCoverageLoading(false);
+    }
+  }, []);
+
   const toggleSelected = useCallback((id: string) => {
     setSelectedIds((current) => (
       current.includes(id)
@@ -224,14 +242,19 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (access.status !== 'ready') return;
+    if (access.status !== 'ready' || activeView !== 'review') return;
     void refresh();
-  }, [access.status, refresh]);
+  }, [access.status, activeView, refresh]);
 
   useEffect(() => {
     if (access.status !== 'ready' || activeView !== 'duplicates') return;
     void refreshDuplicates();
   }, [access.status, activeView, refreshDuplicates]);
+
+  useEffect(() => {
+    if (access.status !== 'ready' || activeView !== 'coverage') return;
+    void refreshCoverage();
+  }, [access.status, activeView, refreshCoverage]);
 
   useEffect(() => {
     if (access.status !== 'ready' || activeView !== 'duplicates' || !selectedDuplicateMarkerId) {
@@ -424,6 +447,22 @@ export default function App() {
     sendSelectedToAi,
     aiBusy: busyAction?.id === '__ai__',
   });
+  const activeViewLoading = activeView === 'review'
+    ? loading
+    : activeView === 'duplicates'
+      ? duplicateLoading
+      : coverageLoading;
+  const refreshActiveView = () => {
+    if (activeView === 'duplicates') {
+      void refreshDuplicates();
+      return;
+    }
+    if (activeView === 'coverage') {
+      void refreshCoverage();
+      return;
+    }
+    void refresh();
+  };
 
   if (access.status === 'loading') {
     return <Shell title="OEM UGC Review"><div className="empty">Checking admin access...</div></Shell>;
@@ -453,8 +492,8 @@ export default function App() {
           <button
             type="button"
             className="icon-button"
-            onClick={() => void refresh()}
-            disabled={loading}
+            onClick={refreshActiveView}
+            disabled={activeViewLoading}
             aria-label="Refresh"
             title="Refresh"
           >
@@ -473,6 +512,13 @@ export default function App() {
             onClick={() => setActiveView('duplicates')}
           >
             Duplicate Images
+          </button>
+          <button
+            type="button"
+            className={activeView === 'coverage' ? 'view-tab active' : 'view-tab'}
+            onClick={() => setActiveView('coverage')}
+          >
+            Image Coverage
           </button>
           <button type="button" className="danger-ghost" onClick={() => void clearStaleImages()} disabled={loading}>Delete Stale</button>
           <button type="button" className="danger-ghost" onClick={() => void clearTestImages()} disabled={loading}>Delete _test</button>
@@ -577,7 +623,7 @@ export default function App() {
             </div>
           </section>
         </>
-      ) : (
+      ) : activeView === 'duplicates' ? (
         <section className="duplicate-summary-panel">
           <div>
             <h2>Duplicate Image Markers</h2>
@@ -591,7 +637,7 @@ export default function App() {
             {duplicateLoading ? 'Loading...' : 'Refresh Duplicates'}
           </button>
         </section>
-      )}
+      ) : null}
       {activeView === 'review' && <section className="state-actions">
         <div className="state-action-buttons">{stateActions}</div>
         <strong>{selectedVisibleItems.length} selected / {visibleItems.length} visible / {uploadStats.total} total</strong>
@@ -812,7 +858,7 @@ export default function App() {
             <div className="empty">Select an item.</div>
           )}
         </section>
-      </main> : (
+      </main> : activeView === 'duplicates' ? (
         <main className="review-layout duplicate-layout">
           <section className="queue">
             {duplicateLoading && duplicateMarkers.length === 0 ? (
@@ -871,6 +917,14 @@ export default function App() {
             )}
           </section>
         </main>
+      ) : (
+        <ImageCoverageView
+          report={coverageReport}
+          loading={coverageLoading}
+          regionFilter={coverageRegion}
+          onRegionFilterChange={setCoverageRegion}
+          onRefresh={() => void refreshCoverage()}
+        />
       )}
     </Shell>
   );
@@ -1063,7 +1117,11 @@ function initialDuplicateMarker(): string | null {
 }
 
 function initialView(): AdminView {
-  return initialDuplicateMarker() ? 'duplicates' : 'review';
+  if (initialDuplicateMarker()) return 'duplicates';
+  if (typeof window === 'undefined') return 'review';
+  return new URLSearchParams(window.location.search).get('view') === 'coverage'
+    ? 'coverage'
+    : 'review';
 }
 
 function formatUserSummary(item: PendingSubmission): string {

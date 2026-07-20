@@ -77,6 +77,48 @@ export type ReviewSubmissionStats = {
   byStatus: { status: ModerationStatus; count: number }[];
 };
 
+export type ImageCoverageMetric = {
+  totalPoints: number;
+  coveredPoints: number;
+  missingPoints: number;
+  imageCount: number;
+  coverageRate: number;
+};
+
+export type ImageCoverageType = ImageCoverageMetric & {
+  key: string;
+  name: string;
+  category: string;
+  missingMarkers: {
+    markerId: string;
+    shortUrl: string;
+  }[];
+};
+
+export type ImageCoverageCategory = ImageCoverageMetric & {
+  key: string;
+  name: string;
+};
+
+export type ImageCoverageRegion = ImageCoverageMetric & {
+  key: string;
+  name: string;
+  categories: ImageCoverageCategory[];
+  types: ImageCoverageType[];
+};
+
+export type ImageCoverageReport = {
+  generatedAt: string;
+  scope: 'prod' | 'test';
+  manifest: {
+    schemaVersion: number;
+    generatedAt: string;
+    sourceCommit: string;
+  };
+  total: ImageCoverageMetric;
+  regions: ImageCoverageRegion[];
+};
+
 export type ListPendingSubmissionsOptions = {
   statuses?: ModerationStatus[];
   from?: string;
@@ -239,6 +281,14 @@ export async function listDuplicateImageMarkers(options: {
     limit: payload.limit ?? limit,
     offset: payload.offset ?? offset,
   };
+}
+
+export async function getImageCoverage(): Promise<ImageCoverageReport> {
+  const response = await fetch(`${API_BASE}/moderation/v1/images/coverage?scope=prod`, {
+    credentials: 'include',
+  });
+  if (!response.ok) throw await toApiError(response);
+  return await response.json() as ImageCoverageReport;
 }
 
 export async function listDuplicateMarkerImages(markerId: string, options: {
