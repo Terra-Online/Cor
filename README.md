@@ -11,12 +11,22 @@ pnpm dev
 
 Local server: `http://localhost:5429`
 
-Default routing:
+Pages:
 
-- `localhost` / `127.0.0.1` admin UI -> `http://localhost:8787`
+- Admin console: `http://localhost:5429/`
+- Atlos image report: `http://localhost:5429/report`
+- User registration report: `http://localhost:5429/report/users`
+- Translation report: `http://localhost:5429/report/translations`
+
+Default API routing:
+
+- Authentication -> `http://localhost:8787/auth/*`
+- Moderation and upload data -> `localhost:5429/api/*` -> `https://api.opendfieldmap.org/*`
 - `https://admin.opendfieldmap.org` -> `https://api.opendfieldmap.org`
 
-Set `VITE_API_BASE` only for nonstandard environments.
+Local overrides belong in `.env.development.local`; production builds must leave
+`VITE_AUTH_API_BASE` and `VITE_DATA_API_BASE` unset so both resolve to
+`https://api.opendfieldmap.org` on `admin.opendfieldmap.org`.
 
 ## Production
 

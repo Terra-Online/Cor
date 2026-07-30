@@ -626,9 +626,19 @@ export default function App() {
               </div>
             </div>
             <div className="stats-summary">
-              <div className="stats-total">
-                <span>Total uploads</span>
-                <strong>{uploadStats.total}</strong>
+              <div className="stats-kind-totals" aria-label="Upload counts by kind">
+                <div className="stats-total">
+                  <span>Total</span>
+                  <strong>{uploadStats.total}</strong>
+                </div>
+                <div className="stats-total">
+                  <span>Images</span>
+                  <strong>{uploadStats.imageCount}</strong>
+                </div>
+                <div className="stats-total">
+                  <span>Comments</span>
+                  <strong>{uploadStats.commentCount}</strong>
+                </div>
               </div>
               <div className="stats-breakdown">
                 {uploadStats.byType.map((entry) => (
@@ -1018,38 +1028,57 @@ function buildUploadStats(
   startDate: Date;
   endDate: Date;
   total: number;
+  imageCount: number;
+  commentCount: number;
   byType: { type: string; count: number }[];
 } {
   const { startDate, endDate } = dateRange;
-  if (serverStats) {
-    return {
-      startDate,
-      endDate,
-      total: serverStats.total,
-      byType: serverStats.byType,
-    };
-  }
+  const matchingItems = items.filter((item) => {
+    const timestamp = new Date(item.createdAt).getTime();
+    return Number.isFinite(timestamp)
+      && timestamp >= startDate.getTime()
+      && timestamp <= endDate.getTime()
+      ;
+  });
+  const fallbackImageCount = matchingItems.filter((item) => item.kind === 'image').length;
+  const fallbackCommentCount = matchingItems.filter((item) => item.kind === 'comment').length;
 
   const typeCounts = new Map<string, number>();
-  let total = 0;
-
-  for (const item of items) {
-    const createdAt = new Date(item.createdAt);
-    const timestamp = createdAt.getTime();
-    if (!Number.isFinite(timestamp) || timestamp < startDate.getTime() || timestamp > endDate.getTime()) {
-      continue;
-    }
-
+  for (const item of matchingItems) {
     const type = item.poiType || 'unknown';
     typeCounts.set(type, (typeCounts.get(type) ?? 0) + 1);
-    total += 1;
   }
 
-  const byType = [...typeCounts.entries()]
+  const fallbackByType = [...typeCounts.entries()]
     .map(([type, count]) => ({ type, count }))
     .sort((a, b) => b.count - a.count || a.type.localeCompare(b.type));
 
-  return { startDate, endDate, total, byType };
+  // The API's aggregate can lag behind its item list. When the full result set
+  // is present, derive every count from the items so all totals share one source.
+  const hasCompleteItemSet = !serverStats || matchingItems.length >= serverStats.total;
+  if (hasCompleteItemSet) {
+    return {
+      startDate,
+      endDate,
+      total: matchingItems.length,
+      imageCount: fallbackImageCount,
+      commentCount: fallbackCommentCount,
+      byType: fallbackByType,
+    };
+  }
+
+  const imageCount = serverStats.byKind?.find((entry) => entry.kind === 'image')?.count
+    ?? fallbackImageCount;
+  const commentCount = serverStats.byKind?.find((entry) => entry.kind === 'comment')?.count
+    ?? fallbackCommentCount;
+  return {
+    startDate,
+    endDate,
+    total: serverStats.total,
+    imageCount,
+    commentCount,
+    byType: serverStats.byType,
+  };
 }
 
 function resolveDateRange(

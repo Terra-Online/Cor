@@ -73,6 +73,7 @@ export type DuplicateImageMarker = {
 
 export type ReviewSubmissionStats = {
   total: number;
+  byKind?: { kind: PendingSubmission['kind']; count: number }[];
   byType: { type: string; count: number }[];
   byStatus: { status: ModerationStatus; count: number }[];
 };
@@ -117,6 +118,59 @@ export type ImageCoverageReport = {
   };
   total: ImageCoverageMetric;
   regions: ImageCoverageRegion[];
+};
+
+export type UserRegistrationReport = {
+  generatedAt: string;
+  totalUsers: number;
+  firstRegistrationDate: string | null;
+  lastRegistrationDate: string | null;
+  daily: Array<{ date: string; count: number }>;
+  sources: Array<{ source: string; count: number }>;
+};
+
+export type TranslationReport = {
+  generatedAt: string;
+  totalTranslations: number;
+  sourceTexts: number;
+  glossaryTranslations: number;
+  firstTranslationDate: string | null;
+  lastTranslationDate: string | null;
+  daily: Array<{ date: string; count: number }>;
+  sources: Array<{ language: string; count: number }>;
+  targets: Array<{ language: string; count: number }>;
+  flows: Array<{ sourceLanguage: string; targetLanguage: string; count: number }>;
+};
+
+export type UgcLikeReport = {
+  generatedAt: string;
+  totalLikes: number;
+  imageLikes: number;
+  commentLikes: number;
+  commentDislikes: number;
+  uniqueReactors: number;
+  likedSubmissions: number;
+  firstReactionDate: string | null;
+  lastReactionDate: string | null;
+  topImage: {
+    id: string;
+    markerId: string;
+    poiType: string;
+    filePath: string;
+    likeCount: number;
+    createdAt: string;
+    pointUrl: string;
+  } | null;
+  daily: Array<{
+    date: string;
+    imageLikes: number;
+    commentLikes: number;
+    commentDislikes: number;
+  }>;
+  contributorLikes: Array<{
+    userId: string;
+    likeCount: number;
+  }>;
 };
 
 export type OrphanImageObject = {
@@ -190,14 +244,16 @@ export class ApiClientError extends Error {
 }
 
 const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1']);
-const LOCAL_API_BASE = 'http://localhost:8787';
+const LOCAL_AUTH_API_BASE = 'http://localhost:8787';
+const LOCAL_DATA_API_BASE = '/api';
 const PROD_API_BASE = 'https://api.opendfieldmap.org';
 const ADMIN_HOSTNAME = 'admin.opendfieldmap.org';
 
-export const API_BASE = resolveApiBase().replace(/\/$/, '');
+export const AUTH_API_BASE = resolveAuthApiBase().replace(/\/$/, '');
+export const DATA_API_BASE = resolveDataApiBase().replace(/\/$/, '');
 
 export async function getSession(): Promise<AdminUser | null> {
-  const response = await fetch(`${API_BASE}/auth/v1/session`, {
+  const response = await fetch(`${AUTH_API_BASE}/auth/v1/session`, {
     credentials: 'include',
   });
   if (response.status === 401) return null;
@@ -207,7 +263,7 @@ export async function getSession(): Promise<AdminUser | null> {
 }
 
 export async function startGoogleSignIn(callbackURL: string): Promise<string> {
-  const response = await fetch(`${API_BASE}/auth/v1/sign-in/social`, {
+  const response = await fetch(`${AUTH_API_BASE}/auth/v1/sign-in/social`, {
     method: 'POST',
     credentials: 'include',
     headers: {
@@ -244,7 +300,7 @@ export async function listPendingSubmissions(options: ListPendingSubmissionsOpti
     params.set('to', options.to);
   }
   params.set('limit', String(options.limit ?? MODERATION_DATE_FETCH_LIMIT));
-  const response = await fetch(`${API_BASE}/moderation/v1/pending?${params.toString()}`, {
+  const response = await fetch(`${DATA_API_BASE}/moderation/v1/pending?${params.toString()}`, {
     credentials: 'include',
   });
   if (!response.ok) throw await toApiError(response);
@@ -284,7 +340,7 @@ export async function listDuplicateImageMarkers(options: {
     limit: String(limit),
     offset: String(offset),
   });
-  const response = await fetch(`${API_BASE}/moderation/v1/images/duplicates?${params.toString()}`, {
+  const response = await fetch(`${DATA_API_BASE}/moderation/v1/images/duplicates?${params.toString()}`, {
     credentials: 'include',
   });
   if (!response.ok) throw await toApiError(response);
@@ -308,15 +364,43 @@ export async function listDuplicateImageMarkers(options: {
 }
 
 export async function getImageCoverage(): Promise<ImageCoverageReport> {
-  const response = await fetch(`${API_BASE}/moderation/v1/images/coverage?scope=prod`, {
+  const response = await fetch(`${DATA_API_BASE}/moderation/v1/images/coverage?scope=prod`, {
     credentials: 'include',
   });
   if (!response.ok) throw await toApiError(response);
   return await response.json() as ImageCoverageReport;
 }
 
+export async function getUserRegistrationReport(): Promise<UserRegistrationReport> {
+  const response = await fetch(`${DATA_API_BASE}/admin/v1/reports/registrations`, {
+    credentials: 'include',
+  });
+  if (!response.ok) throw await toApiError(response);
+  return await response.json() as UserRegistrationReport;
+}
+
+export async function getTranslationReport(): Promise<TranslationReport> {
+  const response = await fetch(`${DATA_API_BASE}/admin/v1/reports/translations`, {
+    credentials: 'include',
+  });
+  if (!response.ok) throw await toApiError(response);
+  return await response.json() as TranslationReport;
+}
+
+export async function getUgcLikeReport(): Promise<UgcLikeReport> {
+  const response = await fetch(`${DATA_API_BASE}/admin/v1/reports/ugc-likes`, {
+    credentials: 'include',
+  });
+  if (!response.ok) throw await toApiError(response);
+  return await response.json() as UgcLikeReport;
+}
+
+export function getPublicImageUrl(filePath: string): string {
+  return `${DATA_API_BASE}/uploads/v1/public-file/${encodeObjectPath(filePath)}`;
+}
+
 export async function getOrphanImages(): Promise<OrphanImageReport> {
-  const response = await fetch(`${API_BASE}/moderation/v1/images/orphans`, {
+  const response = await fetch(`${DATA_API_BASE}/moderation/v1/images/orphans`, {
     credentials: 'include',
   });
   if (!response.ok) throw await toApiError(response);
@@ -339,7 +423,7 @@ export async function listDuplicateMarkerImages(markerId: string, options: {
     limit: String(limit),
     offset: String(offset),
   });
-  const response = await fetch(`${API_BASE}/moderation/v1/images/duplicates/${encodeURIComponent(markerId)}?${params.toString()}`, {
+  const response = await fetch(`${DATA_API_BASE}/moderation/v1/images/duplicates/${encodeURIComponent(markerId)}?${params.toString()}`, {
     credentials: 'include',
   });
   if (!response.ok) throw await toApiError(response);
@@ -364,7 +448,7 @@ export async function updateSubmissionStatus(
   status: ModerationStatus,
   moderationNote?: string,
 ): Promise<void> {
-  const response = await fetch(`${API_BASE}/moderation/v1/${encodeURIComponent(id)}/status`, {
+  const response = await fetch(`${DATA_API_BASE}/moderation/v1/${encodeURIComponent(id)}/status`, {
     method: 'PATCH',
     credentials: 'include',
     headers: {
@@ -384,7 +468,7 @@ export async function archiveTestImages(): Promise<{
   deletedObjects: 0;
   deletedRows: 0;
 }> {
-  const response = await fetch(`${API_BASE}/moderation/v1/test-images`, {
+  const response = await fetch(`${DATA_API_BASE}/moderation/v1/test-images`, {
     method: 'DELETE',
     credentials: 'include',
   });
@@ -398,7 +482,7 @@ export async function archiveTestImages(): Promise<{
 }
 
 export async function runModerationOnce(): Promise<number> {
-  const response = await fetch(`${API_BASE}/moderation/v1/run`, {
+  const response = await fetch(`${DATA_API_BASE}/moderation/v1/run`, {
     method: 'POST',
     credentials: 'include',
   });
@@ -408,7 +492,7 @@ export async function runModerationOnce(): Promise<number> {
 }
 
 export async function runModerationSelected(ids: string[]): Promise<number> {
-  const response = await fetch(`${API_BASE}/moderation/v1/run`, {
+  const response = await fetch(`${DATA_API_BASE}/moderation/v1/run`, {
     method: 'POST',
     credentials: 'include',
     headers: {
@@ -422,34 +506,53 @@ export async function runModerationSelected(ids: string[]): Promise<number> {
 }
 
 export async function fetchImageBlobUrl(filePath: string): Promise<string> {
-  const response = await fetch(`${API_BASE}/uploads/v1/file/${encodeObjectPath(filePath)}`, {
+  const response = await fetch(`${DATA_API_BASE}/uploads/v1/file/${encodeObjectPath(filePath)}`, {
     credentials: 'include',
   });
   if (!response.ok) throw await toApiError(response);
   return URL.createObjectURL(await response.blob());
 }
 
-function resolveApiBase(): string {
+function resolveAuthApiBase(): string {
+  const configured = import.meta.env.VITE_AUTH_API_BASE?.trim();
+  if (configured) {
+    return configured;
+  }
+
   const hostname = currentHostname();
 
   if (LOCAL_HOSTNAMES.has(hostname)) {
-    return LOCAL_API_BASE;
+    return LOCAL_AUTH_API_BASE;
   }
 
   if (hostname === ADMIN_HOSTNAME) {
     return PROD_API_BASE;
   }
 
-  const configured = import.meta.env.VITE_API_BASE?.trim();
-  if (configured) {
-    return configured;
-  }
-
   if (import.meta.env.PROD) {
     return PROD_API_BASE;
   }
 
-  return LOCAL_API_BASE;
+  return LOCAL_AUTH_API_BASE;
+}
+
+function resolveDataApiBase(): string {
+  const configured = import.meta.env.VITE_DATA_API_BASE?.trim();
+  if (configured) {
+    return configured;
+  }
+
+  const hostname = currentHostname();
+
+  if (LOCAL_HOSTNAMES.has(hostname)) {
+    return LOCAL_DATA_API_BASE;
+  }
+
+  if (hostname === ADMIN_HOSTNAME || import.meta.env.PROD) {
+    return PROD_API_BASE;
+  }
+
+  return LOCAL_DATA_API_BASE;
 }
 
 function currentHostname(): string {
