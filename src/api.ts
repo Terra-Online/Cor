@@ -119,6 +119,30 @@ export type ImageCoverageReport = {
   regions: ImageCoverageRegion[];
 };
 
+export type OrphanImageObject = {
+  key: string;
+  url: string;
+  sizeBytes: number;
+  uploadedAt: string;
+  etag: string;
+  contentType: string | null;
+  sourceMimeType: string | null;
+  convertedToWebp: boolean;
+  storageClass: string;
+};
+
+export type OrphanImageReport = {
+  generatedAt: string;
+  items: OrphanImageObject[];
+  stats: {
+    r2ObjectCount: number;
+    r2SizeBytes: number;
+    referencedFileCount: number;
+    orphanObjectCount: number;
+    orphanSizeBytes: number;
+  };
+};
+
 export type ListPendingSubmissionsOptions = {
   statuses?: ModerationStatus[];
   from?: string;
@@ -291,6 +315,14 @@ export async function getImageCoverage(): Promise<ImageCoverageReport> {
   return await response.json() as ImageCoverageReport;
 }
 
+export async function getOrphanImages(): Promise<OrphanImageReport> {
+  const response = await fetch(`${API_BASE}/moderation/v1/images/orphans`, {
+    credentials: 'include',
+  });
+  if (!response.ok) throw await toApiError(response);
+  return await response.json() as OrphanImageReport;
+}
+
 export async function listDuplicateMarkerImages(markerId: string, options: {
   limit?: number;
   offset?: number;
@@ -346,22 +378,23 @@ export async function updateSubmissionStatus(
   if (!response.ok) throw await toApiError(response);
 }
 
-export async function deleteTestImages(): Promise<{ deletedObjects: number; deletedRows: number }> {
+export async function archiveTestImages(): Promise<{
+  archivedRows: number;
+  retainedObjects: boolean;
+  deletedObjects: 0;
+  deletedRows: 0;
+}> {
   const response = await fetch(`${API_BASE}/moderation/v1/test-images`, {
     method: 'DELETE',
     credentials: 'include',
   });
   if (!response.ok) throw await toApiError(response);
-  return await response.json() as { deletedObjects: number; deletedRows: number };
-}
-
-export async function deleteStaleImages(): Promise<{ deletedObjects: number; deletedRows: number }> {
-  const response = await fetch(`${API_BASE}/moderation/v1/stale`, {
-    method: 'DELETE',
-    credentials: 'include',
-  });
-  if (!response.ok) throw await toApiError(response);
-  return await response.json() as { deletedObjects: number; deletedRows: number };
+  return await response.json() as {
+    archivedRows: number;
+    retainedObjects: boolean;
+    deletedObjects: 0;
+    deletedRows: 0;
+  };
 }
 
 export async function runModerationOnce(): Promise<number> {

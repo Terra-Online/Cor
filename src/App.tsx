@@ -6,13 +6,14 @@ import {
   type DuplicateImageMarker,
   type ImageCoverageReport,
   type ModerationStatus,
+  type OrphanImageReport,
   type PendingSubmission,
   type ReviewSubmissionStats,
   type SubmissionImage,
-  deleteStaleImages,
-  deleteTestImages,
+  archiveTestImages,
   fetchImageBlobUrl,
   getImageCoverage,
+  getOrphanImages,
   getSession,
   listDuplicateImageMarkers,
   listDuplicateMarkerImages,
@@ -22,6 +23,7 @@ import {
   updateSubmissionStatus,
 } from './api';
 import ImageCoverageView, { type CoverageRegionFilter } from './ImageCoverageView';
+import OrphanImagesView from './OrphanImagesView';
 import './styles.css';
 
 type AccessState =
@@ -50,7 +52,7 @@ const MANUAL_QUEUE_STATUSES = new Set<ModerationStatus>(['pending_audit', 'flagg
 const REVIEWED_STATUSES = new Set<ModerationStatus>(['active', 'stale']);
 
 type DateRangePreset = 'today' | '7d' | '30d' | 'custom';
-type AdminView = 'review' | 'duplicates' | 'coverage';
+type AdminView = 'review' | 'duplicates' | 'coverage' | 'orphans';
 
 const DATE_RANGE_PRESETS: { value: DateRangePreset; label: string }[] = [
   { value: 'today', label: 'Today' },
@@ -87,6 +89,8 @@ export default function App() {
   const [coverageReport, setCoverageReport] = useState<ImageCoverageReport | null>(null);
   const [coverageLoading, setCoverageLoading] = useState(false);
   const [coverageRegion, setCoverageRegion] = useState<CoverageRegionFilter>('all');
+  const [orphanReport, setOrphanReport] = useState<OrphanImageReport | null>(null);
+  const [orphanLoading, setOrphanLoading] = useState(false);
   const queryDateRange = useMemo(
     () => resolveDateRange(dateRangePreset, customDateRange),
     [customDateRange, dateRangePreset],
@@ -190,6 +194,18 @@ export default function App() {
     }
   }, []);
 
+  const refreshOrphans = useCallback(async () => {
+    setOrphanLoading(true);
+    setError(null);
+    try {
+      setOrphanReport(await getOrphanImages());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to scan orphan images.');
+    } finally {
+      setOrphanLoading(false);
+    }
+  }, []);
+
   const toggleSelected = useCallback((id: string) => {
     setSelectedIds((current) => (
       current.includes(id)
@@ -255,6 +271,11 @@ export default function App() {
     if (access.status !== 'ready' || activeView !== 'coverage') return;
     void refreshCoverage();
   }, [access.status, activeView, refreshCoverage]);
+
+  useEffect(() => {
+    if (access.status !== 'ready' || activeView !== 'orphans') return;
+    void refreshOrphans();
+  }, [access.status, activeView, refreshOrphans]);
 
   useEffect(() => {
     if (access.status !== 'ready' || activeView !== 'duplicates' || !selectedDuplicateMarkerId) {
@@ -356,29 +377,15 @@ export default function App() {
     }
   }, [note, refresh]);
 
-  const clearTestImages = useCallback(async () => {
+  const archiveTestImageSubmissions = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const result = await deleteTestImages();
+      const result = await archiveTestImages();
       await refresh();
-      setError(`Deleted ${result.deletedObjects} _test objects and ${result.deletedRows} rows.`);
+      setError(`Archived ${result.archivedRows} _test submissions. R2 objects and D1 rows were retained.`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete _test images.');
-    } finally {
-      setLoading(false);
-    }
-  }, [refresh]);
-
-  const clearStaleImages = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await deleteStaleImages();
-      await refresh();
-      setError(`Deleted ${result.deletedObjects} stale objects and ${result.deletedRows} rows.`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete stale images.');
+      setError(err instanceof Error ? err.message : 'Failed to archive _test images.');
     } finally {
       setLoading(false);
     }
@@ -451,7 +458,9 @@ export default function App() {
     ? loading
     : activeView === 'duplicates'
       ? duplicateLoading
-      : coverageLoading;
+      : activeView === 'coverage'
+        ? coverageLoading
+        : orphanLoading;
   const refreshActiveView = () => {
     if (activeView === 'duplicates') {
       void refreshDuplicates();
@@ -459,6 +468,10 @@ export default function App() {
     }
     if (activeView === 'coverage') {
       void refreshCoverage();
+      return;
+    }
+    if (activeView === 'orphans') {
+      void refreshOrphans();
       return;
     }
     void refresh();
@@ -520,8 +533,14 @@ export default function App() {
           >
             Image Coverage
           </button>
-          <button type="button" className="danger-ghost" onClick={() => void clearStaleImages()} disabled={loading}>Delete Stale</button>
-          <button type="button" className="danger-ghost" onClick={() => void clearTestImages()} disabled={loading}>Delete _test</button>
+          <button
+            type="button"
+            className={activeView === 'orphans' ? 'view-tab active' : 'view-tab'}
+            onClick={() => setActiveView('orphans')}
+          >
+            Orphans
+          </button>
+          <button type="button" className="danger-ghost" onClick={() => void archiveTestImageSubmissions()} disabled={loading}>Archive _test</button>
           {activeView === 'review' && (
             <button
               type="button"
@@ -917,13 +936,19 @@ export default function App() {
             )}
           </section>
         </main>
-      ) : (
+      ) : activeView === 'coverage' ? (
         <ImageCoverageView
           report={coverageReport}
           loading={coverageLoading}
           regionFilter={coverageRegion}
           onRegionFilterChange={setCoverageRegion}
           onRefresh={() => void refreshCoverage()}
+        />
+      ) : (
+        <OrphanImagesView
+          report={orphanReport}
+          loading={orphanLoading}
+          onRefresh={() => void refreshOrphans()}
         />
       )}
     </Shell>
@@ -1119,9 +1144,8 @@ function initialDuplicateMarker(): string | null {
 function initialView(): AdminView {
   if (initialDuplicateMarker()) return 'duplicates';
   if (typeof window === 'undefined') return 'review';
-  return new URLSearchParams(window.location.search).get('view') === 'coverage'
-    ? 'coverage'
-    : 'review';
+  const view = new URLSearchParams(window.location.search).get('view');
+  return view === 'coverage' || view === 'orphans' ? view : 'review';
 }
 
 function formatUserSummary(item: PendingSubmission): string {
