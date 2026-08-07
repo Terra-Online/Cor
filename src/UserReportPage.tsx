@@ -4,6 +4,7 @@ import {
   getUserRegistrationReport,
 } from './api';
 import ReportHeader from './ReportHeader';
+import { formatReportInteger, useReportLocale, type ReportLocale } from './reportLocale';
 import './report.css';
 
 type UserReportState =
@@ -20,15 +21,25 @@ type ChartStyle = CSSProperties & {
   '--pie-fill'?: string;
 };
 
-const TREND_RANGES: Array<{ value: TrendRange; label: string }> = [
-  { value: '30', label: '30 天' },
-  { value: '90', label: '90 天' },
-  { value: 'all', label: '全部' },
-];
+const TREND_RANGES: TrendRange[] = ['30', '90', 'all'];
+
+const USER_COPY = {
+  'zh-CN': {
+    title: '用户注册报告', unavailable: '用户注册统计暂时不可用。', heading: '用户注册趋势', metricsLabel: '用户注册核心数据', totalUsers: '注册用户', lastSevenDays: '近 7 天新增', today: '今日新增', daily: '逐日注册数量', rangeLabel: '趋势时间范围', all: '全部', daySuffix: ' 天', sourceShare: '注册来源分布', noRegistrations: '暂无注册数据', rangeTotal: '范围合计', peak: '单日峰值', person: ' 人', registered: '注册', noSources: '暂无来源数据', users: '用户', email: '邮箱', unknown: '未知', noPeriod: '暂无注册区间', loading: '正在汇总用户注册数据', errorTitle: '暂时无法读取注册统计', retry: '重新读取', admin: '前往管理登录', separator: '，',
+  },
+  'zh-HK': {
+    title: '用戶註冊報告', unavailable: '用戶註冊統計暫時不可用。', heading: '用戶註冊趨勢', metricsLabel: '用戶註冊核心數據', totalUsers: '註冊用戶', lastSevenDays: '近 7 日新增', today: '今日新增', daily: '每日註冊數量', rangeLabel: '趨勢時間範圍', all: '全部', daySuffix: ' 日', sourceShare: '註冊來源分佈', noRegistrations: '暫無註冊數據', rangeTotal: '範圍合計', peak: '單日高峰', person: ' 人', registered: '註冊', noSources: '暫無來源數據', users: '用戶', email: '電郵', unknown: '未知', noPeriod: '暫無註冊期間', loading: '正在匯總用戶註冊數據', errorTitle: '暫時無法讀取註冊統計', retry: '重新讀取', admin: '前往管理員登入', separator: '，',
+  },
+  en: {
+    title: 'User Registration Report', unavailable: 'User registration statistics are temporarily unavailable.', heading: 'User Registration Trends', metricsLabel: 'Key user registration metrics', totalUsers: 'Registered users', lastSevenDays: 'New in last 7 days', today: 'New today', daily: 'Daily Registrations', rangeLabel: 'Registration trend range', all: 'All', daySuffix: ' days', sourceShare: 'Registration Sources', noRegistrations: 'No registration data', rangeTotal: 'Range total', peak: 'Daily peak', person: ' users', registered: 'Registered', noSources: 'No source data', users: 'Users', email: 'Email', unknown: 'Unknown', noPeriod: 'No registration period available', loading: 'Compiling user registration data', errorTitle: 'Unable to load registration statistics', retry: 'Retry', admin: 'Go to admin sign-in', separator: ', ',
+  },
+} as const;
 
 const SOURCE_COLORS = ['#d96248', '#1d48bd', '#2f7a58', '#ffc428', '#7b6d8d', '#777'];
 
 export default function UserReportPage() {
+  const { locale } = useReportLocale();
+  const copy = USER_COPY[locale];
   const [state, setState] = useState<UserReportState>({ status: 'loading' });
 
   const loadReport = useCallback(async () => {
@@ -38,7 +49,7 @@ export default function UserReportPage() {
     } catch (error) {
       setState({
         status: 'error',
-        message: error instanceof Error ? error.message : '用户注册统计暂时不可用。',
+        message: error instanceof Error ? error.message : '',
       });
     }
   }, []);
@@ -49,14 +60,11 @@ export default function UserReportPage() {
 
   useEffect(() => {
     const previousTitle = document.title;
-    const previousLanguage = document.documentElement.lang;
-    document.title = '用户注册报告 | Open Endfield Map';
-    document.documentElement.lang = 'zh-CN';
+    document.title = `${copy.title} | Open Endfield Map`;
     return () => {
       document.title = previousTitle;
-      document.documentElement.lang = previousLanguage;
     };
-  }, []);
+  }, [copy.title]);
 
   return (
     <div className="report-page user-report-page" data-state={state.status}>
@@ -66,7 +74,7 @@ export default function UserReportPage() {
       />
       {state.status === 'loading' && <UserReportLoading />}
       {state.status === 'error' && (
-        <UserReportError message={state.message} onRetry={() => void loadReport()} />
+        <UserReportError message={state.message || copy.unavailable} onRetry={() => void loadReport()} />
       )}
       {state.status === 'ready' && <UserReportContent report={state.data} />}
     </div>
@@ -74,6 +82,8 @@ export default function UserReportPage() {
 }
 
 function UserReportContent({ report }: { report: UserRegistrationReport }) {
+  const { locale } = useReportLocale();
+  const copy = USER_COPY[locale];
   const [range, setRange] = useState<TrendRange>('90');
   const allDaily = useMemo(() => fillDailyRegistrations(report.daily), [report.daily]);
   const visibleDaily = useMemo(() => {
@@ -88,13 +98,13 @@ function UserReportContent({ report }: { report: UserRegistrationReport }) {
       <section className="user-report-overview">
         <div className="user-report-title">
           <span>USER REGISTRATION REPORT</span>
-          <h1>用户注册趋势</h1>
-          <p>{formatReportPeriod(report.firstRegistrationDate, report.lastRegistrationDate)}</p>
+          <h1>{copy.heading}</h1>
+          <p>{formatReportPeriod(report.firstRegistrationDate, report.lastRegistrationDate, locale)}</p>
         </div>
-        <div className="user-report-metrics" aria-label="用户注册核心数据">
-          <ReportMetric label="注册用户" value={report.totalUsers} />
-          <ReportMetric label="近 7 天新增" value={latestSevenDays} />
-          <ReportMetric label="今日新增" value={todayCount} />
+        <div className="user-report-metrics" aria-label={copy.metricsLabel}>
+          <ReportMetric label={copy.totalUsers} value={report.totalUsers} />
+          <ReportMetric label={copy.lastSevenDays} value={latestSevenDays} />
+          <ReportMetric label={copy.today} value={todayCount} />
         </div>
       </section>
 
@@ -103,18 +113,18 @@ function UserReportContent({ report }: { report: UserRegistrationReport }) {
           <div className="user-panel-heading">
             <div>
               <span>DAILY REGISTRATIONS</span>
-              <h2>逐日注册数量</h2>
+              <h2>{copy.daily}</h2>
             </div>
-            <div className="user-range-tabs" role="group" aria-label="趋势时间范围">
+            <div className="user-range-tabs" role="group" aria-label={copy.rangeLabel}>
               {TREND_RANGES.map((item) => (
                 <button
-                  key={item.value}
+                  key={item}
                   type="button"
-                  className={range === item.value ? 'active' : ''}
-                  aria-pressed={range === item.value}
-                  onClick={() => setRange(item.value)}
+                  className={range === item ? 'active' : ''}
+                  aria-pressed={range === item}
+                  onClick={() => setRange(item)}
                 >
-                  {item.label}
+                  {item === 'all' ? copy.all : `${item}${copy.daySuffix}`}
                 </button>
               ))}
             </div>
@@ -126,7 +136,7 @@ function UserReportContent({ report }: { report: UserRegistrationReport }) {
           <div className="user-panel-heading">
             <div>
               <span>REGISTRATION SOURCE</span>
-              <h2>注册来源分布</h2>
+              <h2>{copy.sourceShare}</h2>
             </div>
           </div>
           <RegistrationSourceChart items={report.sources} totalUsers={report.totalUsers} />
@@ -137,17 +147,20 @@ function UserReportContent({ report }: { report: UserRegistrationReport }) {
 }
 
 function ReportMetric({ label, value }: { label: string; value: number }) {
+  const { locale } = useReportLocale();
   return (
     <div>
       <span>{label}</span>
-      <strong>{formatInteger(value)}</strong>
+      <strong>{formatReportInteger(value, locale)}</strong>
     </div>
   );
 }
 
 function RegistrationTrendChart({ items }: { items: DailyRegistration[] }) {
+  const { locale } = useReportLocale();
+  const copy = USER_COPY[locale];
   if (items.length === 0) {
-    return <div className="user-chart-empty">暂无注册数据</div>;
+    return <div className="user-chart-empty">{copy.noRegistrations}</div>;
   }
 
   const maximum = Math.max(...items.map((item) => item.count), 1);
@@ -160,13 +173,13 @@ function RegistrationTrendChart({ items }: { items: DailyRegistration[] }) {
   return (
     <div className="user-trend-chart">
       <div className="user-trend-summary">
-        <p><span>范围合计</span><strong>{formatInteger(total)}</strong></p>
-        <p><span>单日峰值</span><strong>{formatInteger(maximum)}</strong></p>
+        <p><span>{copy.rangeTotal}</span><strong>{formatReportInteger(total, locale)}</strong></p>
+        <p><span>{copy.peak}</span><strong>{formatReportInteger(maximum, locale)}</strong></p>
       </div>
       <div className="user-trend-body">
         <div className="user-trend-scale" aria-hidden="true">
-          <span>{formatInteger(maximum)}</span>
-          <span>{formatInteger(Math.round(maximum / 2))}</span>
+          <span>{formatReportInteger(maximum, locale)}</span>
+          <span>{formatReportInteger(Math.round(maximum / 2), locale)}</span>
           <span>0</span>
         </div>
         <div className="user-trend-scroll">
@@ -178,8 +191,8 @@ function RegistrationTrendChart({ items }: { items: DailyRegistration[] }) {
                   <div
                     className="user-trend-bar"
                     key={item.date}
-                    title={`${formatFullDate(item.date)} · ${formatInteger(item.count)} 人`}
-                    aria-label={`${formatFullDate(item.date)}，注册 ${formatInteger(item.count)} 人`}
+                    title={`${formatFullDate(item.date, locale)} · ${formatReportInteger(item.count, locale)}${copy.person}`}
+                    aria-label={`${formatFullDate(item.date, locale)}${copy.separator}${copy.registered} ${formatReportInteger(item.count, locale)}${copy.person}`}
                   >
                     <span style={{
                       '--bar-height': `${item.count > 0 ? Math.max(2, (item.count / maximum) * 100) : 0}%`,
@@ -207,9 +220,11 @@ function RegistrationSourceChart({
   items: UserRegistrationReport['sources'];
   totalUsers: number;
 }) {
+  const { locale } = useReportLocale();
+  const copy = USER_COPY[locale];
   const countedTotal = items.reduce((sum, item) => sum + item.count, 0);
   if (countedTotal === 0) {
-    return <div className="user-chart-empty">暂无来源数据</div>;
+    return <div className="user-chart-empty">{copy.noSources}</div>;
   }
 
   let cursor = 0;
@@ -236,20 +251,20 @@ function RegistrationSourceChart({
         style={{ '--pie-fill': pieFill } as ChartStyle}
         role="img"
         aria-label={segments.map((item) => (
-          `${sourceLabel(item.source)} ${item.percentage.toFixed(1)}%`
-        )).join('，')}
+          `${sourceLabel(item.source, locale)} ${item.percentage.toFixed(1)}%`
+        )).join(copy.separator)}
       >
         <div>
-          <strong>{formatInteger(totalUsers)}</strong>
-          <span>用户</span>
+          <strong>{formatReportInteger(totalUsers, locale)}</strong>
+          <span>{copy.users}</span>
         </div>
       </div>
       <div className="user-source-legend">
         {segments.map((item) => (
           <div key={item.source}>
             <i style={{ backgroundColor: item.color }} aria-hidden="true" />
-            <span>{sourceLabel(item.source)}</span>
-            <strong>{formatInteger(item.count)}</strong>
+            <span>{sourceLabel(item.source, locale)}</span>
+            <strong>{formatReportInteger(item.count, locale)}</strong>
             <small>{item.percentage.toFixed(1)}%</small>
           </div>
         ))}
@@ -281,19 +296,20 @@ function parseDateKey(value: string | undefined): Date | null {
   return Number.isFinite(date.getTime()) ? date : null;
 }
 
-function sourceLabel(source: string): string {
+function sourceLabel(source: string, locale: ReportLocale): string {
+  const copy = USER_COPY[locale];
   const normalized = source.trim().toLowerCase();
-  if (['credential', 'email', 'email-password', 'password'].includes(normalized)) return '邮箱';
+  if (['credential', 'email', 'email-password', 'password'].includes(normalized)) return copy.email;
   if (normalized === 'google') return 'Google';
   if (normalized === 'github') return 'GitHub';
   if (normalized === 'discord') return 'Discord';
-  if (!normalized || normalized === 'unknown') return '未知';
+  if (!normalized || normalized === 'unknown') return copy.unknown;
   return source;
 }
 
-function formatReportPeriod(first: string | null, last: string | null): string {
-  if (!first || !last) return '暂无注册区间';
-  return `${formatFullDate(first)} - ${formatFullDate(last)}`;
+function formatReportPeriod(first: string | null, last: string | null, locale: ReportLocale): string {
+  if (!first || !last) return USER_COPY[locale].noPeriod;
+  return `${formatFullDate(first, locale)} - ${formatFullDate(last, locale)}`;
 }
 
 function formatAxisDate(value: string | undefined): string {
@@ -301,10 +317,10 @@ function formatAxisDate(value: string | undefined): string {
   return value.slice(5).replace('-', '/');
 }
 
-function formatFullDate(value: string): string {
+function formatFullDate(value: string, locale: ReportLocale): string {
   const date = parseDateKey(value);
   if (!date) return value;
-  return new Intl.DateTimeFormat('zh-CN', {
+  return new Intl.DateTimeFormat(locale, {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -312,30 +328,29 @@ function formatFullDate(value: string): string {
   }).format(date);
 }
 
-function formatInteger(value: number): string {
-  return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 }).format(value);
-}
-
 function UserReportLoading() {
+  const { locale } = useReportLocale();
   return (
     <main className="report-loading" aria-live="polite">
       <div className="report-loader-mark" aria-hidden="true"><span /></div>
       <p>READING USER REGISTRY</p>
-      <strong>正在汇总用户注册数据</strong>
+      <strong>{USER_COPY[locale].loading}</strong>
       <div className="report-loader-track"><span /></div>
     </main>
   );
 }
 
 function UserReportError({ message, onRetry }: { message: string; onRetry: () => void }) {
+  const { locale } = useReportLocale();
+  const copy = USER_COPY[locale];
   return (
     <main className="report-error-state">
       <span>DATA LINK / OFFLINE</span>
-      <h1>暂时无法读取注册统计</h1>
+      <h1>{copy.errorTitle}</h1>
       <p>{message}</p>
       <div>
-        <button type="button" onClick={onRetry}>重新读取</button>
-        <a href="/">前往管理登录</a>
+        <button type="button" onClick={onRetry}>{copy.retry}</button>
+        <a href="/">{copy.admin}</a>
       </div>
     </main>
   );

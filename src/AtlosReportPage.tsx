@@ -12,7 +12,6 @@ import {
   type ImageCoverageMetric,
   type ImageCoverageReport,
   type PendingSubmission,
-  type ReviewSubmissionStats,
   type UgcLikeReport,
   getImageCoverage,
   getPublicImageUrl,
@@ -21,6 +20,7 @@ import {
 } from './api';
 import ReportHeader from './ReportHeader';
 import { reportCategoryAsset, reportItemAsset } from './reportAssets';
+import { formatReportInteger, useReportLocale, type ReportLocale } from './reportLocale';
 import './report.css';
 
 type ReportState =
@@ -39,7 +39,7 @@ type ReportModel = {
   categories: Array<{ key: string; name: string; metric: ImageCoverageMetric; rate: number }>;
   coreTypes: Array<{ key: string; name: string; metric: ImageCoverageMetric }>;
   otherTypes: Array<{ key: string; name: string; metric: ImageCoverageMetric }>;
-  dailyUploads: Array<{ date: string; count: number }>;
+  dailyUploads: Array<{ date: string; count: number; staleCount: number }>;
   ugcLikes: UgcLikeReport;
   contributors: ContributorStats[];
 };
@@ -56,6 +56,7 @@ type ContributorStats = {
 };
 
 type ContributorSort = 'contributions' | 'likes' | 'karma';
+type UploadTrendRange = '7' | '30' | '90' | 'all';
 
 type ChartStyle = CSSProperties & {
   '--chart-value': string;
@@ -79,19 +80,10 @@ const CATEGORY_ICONS: Record<string, string> = {
   exploration: reportCategoryAsset('exploration'),
 };
 
-const TYPE_NAMES: Record<string, string> = {
-  aurylene: '醚质',
-  crate_i: '初级储藏箱',
-  crate_ii: '中级储藏箱',
-  crate_iii: '高级储藏箱',
-  cratesurprise: '惊喜储藏箱',
-  cratelocked: '上锁储藏箱',
-  gather: '采集点',
-  archives: '档案',
-  wooden_box: '木箱',
-  guiding_butterflies: '引路蝴蝶',
-  pressure_plate: '压力板',
-  aero_salvage: '浮空回收',
+const TYPE_NAMES: Record<ReportLocale, Record<string, string>> = {
+  'zh-CN': { aurylene: '醚质', crate_i: '初级储藏箱', crate_ii: '中级储藏箱', crate_iii: '高级储藏箱', cratesurprise: '惊喜储藏箱', cratelocked: '上锁储藏箱', gather: '采集点', archives: '档案', crates: '储藏箱', wooden_box: '木箱', guiding_butterflies: '引路蝴蝶', pressure_plate: '压力板', aero_salvage: '浮空回收' },
+  'zh-HK': { aurylene: '醚質', crate_i: '初級儲藏箱', crate_ii: '中級儲藏箱', crate_iii: '高級儲藏箱', cratesurprise: '驚喜儲藏箱', cratelocked: '上鎖儲藏箱', gather: '採集點', archives: '檔案', crates: '儲藏箱', wooden_box: '木箱', guiding_butterflies: '引路蝴蝶', pressure_plate: '壓力板', aero_salvage: '浮空回收' },
+  en: { aurylene: 'Aurylene', crate_i: 'Basic Storage Crate', crate_ii: 'Intermediate Storage Crate', crate_iii: 'Advanced Storage Crate', cratesurprise: 'Surprise Storage Crate', cratelocked: 'Locked Storage Crate', gather: 'Gathering Point', archives: 'Archive', crates: 'Storage Crates', wooden_box: 'Wooden Box', guiding_butterflies: 'Guiding Butterflies', pressure_plate: 'Pressure Plate', aero_salvage: 'Aerial Salvage' },
 };
 
 const TYPE_ICONS: Record<string, string> = {
@@ -105,28 +97,54 @@ const TYPE_ICONS: Record<string, string> = {
   archives: reportItemAsset('exbook'),
 };
 
+const UPLOAD_TREND_RANGES: UploadTrendRange[] = ['7', '30', '90', 'all'];
+
+const ATLOS_COPY = {
+  'zh-CN': {
+    title: '地图集影像计划', unavailable: '生产统计暂时不可用。', plan: '地图集影像计划', coreMetrics: '影像计划核心数据', uploads: '累计影像上传', collectionCoverage: '收集物点位覆盖', coreCoverage: '核心类型覆盖', coreTypeCoverage: '核心类型覆盖', imageUnit: ' 张', pointUnit: ' 点位', imagePointRatio: '图片点位比', otherCoverage: '其余类型覆盖', categoryCoverage: '分类覆盖率', typeImageTotal: '类型影像总量', totalCollection: '总收集率', regionComparison: '区域覆盖率对比', regionCoverage: '区域覆盖率', imageTotal: '图片总量', pointTotal: '点位总量', totalComparison: '图片总量与点位总量比较', imagePointTotal: '图片/点位量', imagesPerPoint: '张图片 / 点位', noUploadTypes: '本周期暂无可展示的上传分类。', typeComparison: '八类影像数量对比', dailyUploads: '每日上传数量', rangeLabel: '上传趋势时间范围', all: '全部', daySuffix: ' 天', showStale: '显示 stale', selectedStats: '所选范围上传统计', total: '合计', average: '日均', peak: '峰值', recent: '最近', dailyChart: '每日图片上传柱状图', includesStale: '，包含 stale', reactionTitle: 'UGC 点赞情况', noReactionPeriod: '暂无互动区间', reactionMetrics: 'UGC 点赞核心数据', validLikes: '当前有效点赞', likedUgc: '获赞 UGC', users: '参与用户', commentDislikes: '评论点踩', dailyLikes: '每日有效点赞', daysTotal: '90 天合计', likeChart: '最近九十天图片与评论有效点赞数量', images: '图片', comments: '评论', imageLikes: '图片点赞', commentLikes: '评论点赞', reactionMix: '反馈构成', mostLiked: '最受欢迎图片', viewMostLiked: '在地图中查看最受欢迎图片', likes: '点赞', viewPoint: '查看地图点位', noLikedImage: '暂无公开图片点赞数据', contributorsTitle: '最活跃贡献者', contributorSummary: '贡献者统计概览', contributors: '贡献者', ugcSubmissions: 'UGC 提交', perContributor: '人均贡献', topContributors: '最活跃的十名贡献者', rankUser: '排名 / 用户名 / OEM ID', imageComments: '图片 / 评论', receivedLikes: '获赞', contributions: '贡献量', totalContribution: '总贡献', viewAll: '查看全部', contributorUnit: ' 名贡献者', fullStats: '完整贡献者统计', closeStats: '关闭完整贡献者统计', rank: '排名', username: '用户名', sort: '排序', sortLabel: '贡献者排序方式', byLikes: '按图片与评论收到的点赞总量排序', byKarma: '按当前 Karma 分数排序', byContributions: '按图片与评论提交总量排序', unknown: '未知', noUsername: '未设置用户名', unassigned: '未分配', loading: '正在汇总生产环境影像数据', errorTitle: '暂时无法读取影像统计', retry: '重新读取', admin: '前往管理登录', separator: '，',
+  },
+  'zh-HK': {
+    title: '地圖集影像計劃', unavailable: '生產統計暫時不可用。', plan: '地圖集影像計劃', coreMetrics: '影像計劃核心數據', uploads: '累計影像上傳', collectionCoverage: '收集物點位覆蓋', coreCoverage: '核心類型覆蓋', coreTypeCoverage: '核心類型覆蓋', imageUnit: ' 張', pointUnit: ' 點位', imagePointRatio: '圖片點位比', otherCoverage: '其餘類型覆蓋', categoryCoverage: '分類覆蓋率', typeImageTotal: '類型影像總量', totalCollection: '總收集率', regionComparison: '區域覆蓋率對比', regionCoverage: '區域覆蓋率', imageTotal: '圖片總量', pointTotal: '點位總量', totalComparison: '圖片總量與點位總量比較', imagePointTotal: '圖片/點位量', imagesPerPoint: '張圖片 / 點位', noUploadTypes: '本週期暫無可顯示的上傳分類。', typeComparison: '八類影像數量對比', dailyUploads: '每日上傳數量', rangeLabel: '上傳趨勢時間範圍', all: '全部', daySuffix: ' 日', showStale: '顯示 stale', selectedStats: '所選範圍上傳統計', total: '合計', average: '日均', peak: '高峰', recent: '最近', dailyChart: '每日圖片上傳柱狀圖', includesStale: '，包含 stale', reactionTitle: 'UGC 點讚情況', noReactionPeriod: '暫無互動期間', reactionMetrics: 'UGC 點讚核心數據', validLikes: '目前有效點讚', likedUgc: '獲讚 UGC', users: '參與用戶', commentDislikes: '評論負評', dailyLikes: '每日有效點讚', daysTotal: '90 日合計', likeChart: '最近九十日圖片與評論有效點讚數量', images: '圖片', comments: '評論', imageLikes: '圖片點讚', commentLikes: '評論點讚', reactionMix: '反饋構成', mostLiked: '最受歡迎圖片', viewMostLiked: '在地圖中查看最受歡迎圖片', likes: '點讚', viewPoint: '查看地圖點位', noLikedImage: '暫無公開圖片點讚數據', contributorsTitle: '最活躍貢獻者', contributorSummary: '貢獻者統計概覽', contributors: '貢獻者', ugcSubmissions: 'UGC 提交', perContributor: '人均貢獻', topContributors: '最活躍的十名貢獻者', rankUser: '排名 / 用戶名 / OEM ID', imageComments: '圖片 / 評論', receivedLikes: '獲讚', contributions: '貢獻量', totalContribution: '總貢獻', viewAll: '查看全部', contributorUnit: ' 名貢獻者', fullStats: '完整貢獻者統計', closeStats: '關閉完整貢獻者統計', rank: '排名', username: '用戶名', sort: '排序', sortLabel: '貢獻者排序方式', byLikes: '按圖片與評論收到的點讚總量排序', byKarma: '按目前 Karma 分數排序', byContributions: '按圖片與評論提交總量排序', unknown: '未知', noUsername: '未設定用戶名', unassigned: '未分配', loading: '正在匯總生產環境影像數據', errorTitle: '暫時無法讀取影像統計', retry: '重新讀取', admin: '前往管理員登入', separator: '，',
+  },
+  en: {
+    title: 'Atlas Image Program', unavailable: 'Production statistics are temporarily unavailable.', plan: 'Atlas Image Program', coreMetrics: 'Key image program metrics', uploads: 'Total image uploads', collectionCoverage: 'Collectible point coverage', coreCoverage: 'Core type coverage', coreTypeCoverage: 'Core Type Coverage', imageUnit: ' images', pointUnit: ' points', imagePointRatio: 'image-to-point ratio', otherCoverage: 'Other Type Coverage', categoryCoverage: 'Category Coverage', typeImageTotal: 'Images by Type', totalCollection: 'Overall coverage', regionComparison: 'Regional coverage comparison', regionCoverage: 'Regional Coverage', imageTotal: 'Images', pointTotal: 'Points', totalComparison: 'Image and point total comparison', imagePointTotal: 'Images / Points', imagesPerPoint: 'images / point', noUploadTypes: 'No upload categories to display for this period.', typeComparison: 'Image count comparison across eight types', dailyUploads: 'Daily Uploads', rangeLabel: 'Upload trend range', all: 'All', daySuffix: ' days', showStale: 'Show stale', selectedStats: 'Upload statistics for selected range', total: 'Total', average: 'Daily avg.', peak: 'Peak', recent: 'Last ', dailyChart: ' daily image upload bar chart', includesStale: ', including stale', reactionTitle: 'UGC Reactions', noReactionPeriod: 'No reaction period available', reactionMetrics: 'Key UGC reaction metrics', validLikes: 'Current valid likes', likedUgc: 'Liked UGC', users: 'Participating users', commentDislikes: 'Comment dislikes', dailyLikes: 'Daily Valid Likes', daysTotal: '90-day total', likeChart: 'Valid image and comment likes over the last 90 days', images: 'Images', comments: 'Comments', imageLikes: 'Image likes', commentLikes: 'Comment likes', reactionMix: 'Reaction Mix', mostLiked: 'Most Liked Image', viewMostLiked: 'View the most liked image on the map', likes: 'Likes', viewPoint: 'View Map Point', noLikedImage: 'No public image like data', contributorsTitle: 'Most Active Contributors', contributorSummary: 'Contributor statistics overview', contributors: 'Contributors', ugcSubmissions: 'UGC submissions', perContributor: 'Avg. per contributor', topContributors: 'Ten most active contributors', rankUser: 'Rank / Username / OEM ID', imageComments: 'Images / Comments', receivedLikes: 'Likes', contributions: 'Contributions', totalContribution: 'Total contributions', viewAll: 'View all', contributorUnit: ' contributors', fullStats: 'Full Contributor Statistics', closeStats: 'Close full contributor statistics', rank: 'Rank', username: 'Username', sort: 'Sort', sortLabel: 'Contributor sort order', byLikes: 'Sorted by total likes received on images and comments', byKarma: 'Sorted by current Karma score', byContributions: 'Sorted by total image and comment submissions', unknown: 'Unknown', noUsername: 'Username not set', unassigned: 'Unassigned', loading: 'Compiling production image data', errorTitle: 'Unable to load image statistics', retry: 'Retry', admin: 'Go to admin sign-in', separator: ', ',
+  },
+} as const;
+
 let activeReportScrollFrame = 0;
 
 export default function AtlosReportPage() {
+  const { locale } = useReportLocale();
+  const copy = ATLOS_COPY[locale];
   const [state, setState] = useState<ReportState>({ status: 'loading' });
   const loadReport = useCallback(async () => {
     setState({ status: 'loading' });
     try {
-      const [report, submissions, ugcLikes] = await Promise.all([
+      const [report, submissions, staleSubmissions, ugcLikes] = await Promise.all([
         getImageCoverage(),
         listPendingSubmissions({
+          statuses: ['active'],
+          limit: MODERATION_DATE_FETCH_LIMIT,
+        }),
+        listPendingSubmissions({
+          statuses: ['stale'],
           limit: MODERATION_DATE_FETCH_LIMIT,
         }),
         getUgcLikeReport(),
       ]);
       setState({
         status: 'ready',
-        data: buildReportModel(report, submissions.items, submissions.stats, ugcLikes),
+        data: buildReportModel(
+          report,
+          submissions.items,
+          ugcLikes,
+          staleSubmissions.items,
+        ),
       });
     } catch (error) {
       setState({
         status: 'error',
-        message: error instanceof Error ? error.message : '生产统计暂时不可用。',
+        message: error instanceof Error ? error.message : '',
       });
     }
   }, []);
@@ -137,14 +155,11 @@ export default function AtlosReportPage() {
 
   useEffect(() => {
     const previousTitle = document.title;
-    const previousLanguage = document.documentElement.lang;
-    document.title = '地图集影像计划 | Open Endfield Map';
-    document.documentElement.lang = 'zh-CN';
+    document.title = `${copy.title} | Open Endfield Map`;
     return () => {
       document.title = previousTitle;
-      document.documentElement.lang = previousLanguage;
     };
-  }, []);
+  }, [copy.title]);
 
   return (
     <div className="report-page" data-state={state.status}>
@@ -154,7 +169,7 @@ export default function AtlosReportPage() {
       />
       {state.status === 'loading' && <ReportLoading />}
       {state.status === 'error' && (
-        <ReportError message={state.message} onRetry={() => void loadReport()} />
+        <ReportError message={state.message || copy.unavailable} onRetry={() => void loadReport()} />
       )}
       {state.status === 'ready' && <ReportContent model={state.data} />}
     </div>
@@ -162,6 +177,8 @@ export default function AtlosReportPage() {
 }
 
 function ReportContent({ model }: { model: ReportModel }) {
+  const { locale } = useReportLocale();
+  const copy = ATLOS_COPY[locale];
   const [detailRef, detailVisible] = useInView<HTMLElement>();
   const [uploadsRef, uploadsVisible] = useInView<HTMLElement>();
   const [likesRef, likesVisible] = useInView<HTMLElement>();
@@ -174,22 +191,22 @@ function ReportContent({ model }: { model: ReportModel }) {
         onClick={() => scrollToReportSection(detailRef.current)}
       >
         <div className="report-hero-copy">
-          <h1>OPEN ENDFIELD MAP<small>地图集影像计划</small></h1>
+          <h1>OPEN ENDFIELD MAP<small>{copy.plan}</small></h1>
         </div>
 
-        <div className="report-primary-metrics" aria-label="影像计划核心数据">
+        <div className="report-primary-metrics" aria-label={copy.coreMetrics}>
           <Metric
-            label="三个月新增截图"
+            label={copy.uploads}
             value={model.uploadCount}
           />
           <Metric
-            label="收集物点位覆盖"
+            label={copy.collectionCoverage}
             value={model.coverageRate * 100}
             decimals={1}
             suffix="%"
           />
           <Metric
-            label="核心类型覆盖"
+            label={copy.coreCoverage}
             value={model.coreCoverageRate * 100}
             decimals={1}
             suffix="%"
@@ -211,7 +228,7 @@ function ReportContent({ model }: { model: ReportModel }) {
       >
         <div className="report-detail-layout">
           <div>
-            <SectionHeading eyebrow="CORE TYPE COVERAGE" title="核心类型覆盖" />
+            <SectionHeading eyebrow="CORE TYPE COVERAGE" title={copy.coreTypeCoverage} />
             <div className="report-core-list">
               {model.coreTypes.map((item, index) => {
                 const coverageRate = Math.min(100, Math.max(0, item.metric.coverageRate * 100));
@@ -222,10 +239,10 @@ function ReportContent({ model }: { model: ReportModel }) {
                   <article className="report-core-row" key={item.key}>
                     <div className="report-core-copy">
                       <span>{String(index + 1).padStart(2, '0')}</span>
-                      <strong>{item.name}</strong>
-                      <small>{formatInteger(item.metric.imageCount)} 张 / {formatInteger(item.metric.totalPoints)} 点位</small>
+                      <strong>{displayTypeName(item.key, item.name, locale)}</strong>
+                      <small>{formatReportInteger(item.metric.imageCount, locale)}{copy.imageUnit} / {formatReportInteger(item.metric.totalPoints, locale)}{copy.pointUnit}</small>
                     </div>
-                    <div className="report-core-progress" aria-label={`${item.name} ${coverageRate.toFixed(1)}%，图片点位比 ${imageRate.toFixed(0)}%`}>
+                    <div className="report-core-progress" aria-label={`${displayTypeName(item.key, item.name, locale)} ${coverageRate.toFixed(1)}%${copy.separator}${copy.imagePointRatio} ${imageRate.toFixed(0)}%`}>
                       <span style={{
                         '--chart-value': `${coverageRate}%`,
                         '--chart-delay': `${index * 110}ms`,
@@ -243,7 +260,7 @@ function ReportContent({ model }: { model: ReportModel }) {
               <div className="report-other-coverage">
                 <div className="report-other-heading">
                   <span>OTHER TYPE COVERAGE</span>
-                  <h3>其余类型覆盖</h3>
+                  <h3>{copy.otherCoverage}</h3>
                 </div>
                 <div className="report-other-grid">
                   {model.otherTypes.map((item, index) => {
@@ -251,10 +268,10 @@ function ReportContent({ model }: { model: ReportModel }) {
                     return (
                       <article className="report-other-row" key={item.key}>
                         <div className="report-other-copy">
-                          <strong>{item.name}</strong>
-                          <small>{formatInteger(item.metric.imageCount)} 张 / {formatInteger(item.metric.totalPoints)} 点位</small>
+                          <strong>{displayTypeName(item.key, item.name, locale)}</strong>
+                          <small>{formatReportInteger(item.metric.imageCount, locale)}{copy.imageUnit} / {formatReportInteger(item.metric.totalPoints, locale)}{copy.pointUnit}</small>
                         </div>
-                        <div className="report-other-progress" aria-label={`${item.name} ${coverageRate.toFixed(1)}%`}>
+                        <div className="report-other-progress" aria-label={`${displayTypeName(item.key, item.name, locale)} ${coverageRate.toFixed(1)}%`}>
                           <span style={{
                             '--chart-value': `${coverageRate}%`,
                             '--chart-delay': `${index * 90 + 360}ms`,
@@ -272,14 +289,14 @@ function ReportContent({ model }: { model: ReportModel }) {
           <div className="report-category-panel">
             <p className="report-panel-label report-category-label">
               <span>CATEGORY COVERAGE</span>
-              <strong>分类覆盖率</strong>
+              <strong>{copy.categoryCoverage}</strong>
             </p>
             {model.categories.map((category, index) => (
               <article className="report-category-row" key={category.key}>
                 <img src={CATEGORY_ICONS[category.key] ?? reportCategoryAsset('collection')} alt="" />
                 <div>
                   <div className="report-category-copy">
-                    <strong>{category.name}</strong>
+                    <strong>{displayCategoryName(category.key, category.name, locale)}</strong>
                     <span><AnimatedNumber active={detailVisible} value={category.rate * 100} decimals={1} />%</span>
                   </div>
                   <div className="report-horizontal-track">
@@ -288,7 +305,7 @@ function ReportContent({ model }: { model: ReportModel }) {
                       '--chart-delay': `${index * 130}ms`,
                     } as ChartStyle} />
                   </div>
-                  <small>{formatInteger(category.metric.coveredPoints)} / {formatInteger(category.metric.totalPoints)} POINTS</small>
+                  <small>{formatReportInteger(category.metric.coveredPoints, locale)} / {formatReportInteger(category.metric.totalPoints, locale)} POINTS</small>
                 </div>
               </article>
             ))}
@@ -300,10 +317,14 @@ function ReportContent({ model }: { model: ReportModel }) {
         ref={uploadsRef}
         className="report-band report-uploads-band report-click-page"
         data-visible={uploadsVisible}
-        onClick={() => scrollToReportSection(likesRef.current)}
+        onClick={(event) => {
+          const target = event.target;
+          if (target instanceof Element && target.closest('a, button, input, select, textarea')) return;
+          scrollToReportSection(likesRef.current);
+        }}
       >
         <div className="report-upload-types-section">
-          <SectionHeading eyebrow="TYPE IMAGE TOTAL" title="类型影像总量" />
+          <SectionHeading eyebrow="TYPE IMAGE TOTAL" title={copy.typeImageTotal} />
           <UploadChart active={uploadsVisible} items={model.uploadTypes} />
         </div>
         <DailyUploadChart active={uploadsVisible} items={model.dailyUploads} />
@@ -313,6 +334,7 @@ function ReportContent({ model }: { model: ReportModel }) {
         sectionRef={likesRef}
         active={likesVisible}
         report={model.ugcLikes}
+        onAdvance={() => scrollToReportSection(contributorsRef.current)}
       />
 
       <ContributorSection
@@ -395,6 +417,8 @@ function scrollToReportSection(target: HTMLElement | null) {
 }
 
 function RegionCoverage({ model }: { model: ReportModel }) {
+  const { locale } = useReportLocale();
+  const copy = ATLOS_COPY[locale];
   const regions = [...model.regions]
     .sort((left, right) => regionOrder(left) - regionOrder(right))
     .slice(0, 2);
@@ -409,7 +433,7 @@ function RegionCoverage({ model }: { model: ReportModel }) {
     })),
     {
       key: 'all',
-      name: '总收集率',
+      name: copy.totalCollection,
       coveredPoints: model.report.total.coveredPoints,
       totalPoints: model.report.total.totalPoints,
       rate: model.coverageRate,
@@ -418,19 +442,19 @@ function RegionCoverage({ model }: { model: ReportModel }) {
   ];
 
   return (
-    <div className="report-hero-coverage" aria-label="区域覆盖率对比">
+    <div className="report-hero-coverage" aria-label={copy.regionComparison}>
       <div className="report-coverage-heading">
         <div>
           <span>REGION COVERAGE</span>
-          <h2>区域覆盖率</h2>
+          <h2>{copy.regionCoverage}</h2>
         </div>
       </div>
       <div className="report-region-rows">
         {items.map((item, index) => (
           <article className={`report-region-row${item.aggregate ? ' aggregate' : ''}`} key={item.key}>
             <div className="report-region-label">
-              <strong>{item.name}</strong>
-              <span>{formatInteger(item.coveredPoints)} / {formatInteger(item.totalPoints)}</span>
+              <strong>{item.aggregate ? item.name : displayRegionName(item.key, item.name, locale)}</strong>
+              <span>{formatReportInteger(item.coveredPoints, locale)} / {formatReportInteger(item.totalPoints, locale)}</span>
             </div>
             <div className="report-region-track">
               <span style={{
@@ -468,18 +492,20 @@ function TotalComparison({
   imageCount: number;
   pointCount: number;
 }) {
+  const { locale } = useReportLocale();
+  const copy = ATLOS_COPY[locale];
   const maximum = Math.max(imageCount, pointCount, 1);
   const ratio = pointCount > 0 ? imageCount / pointCount : 0;
   const items = [
-    { key: 'images', label: '图片总量', value: imageCount },
-    { key: 'points', label: '点位总量', value: pointCount },
+    { key: 'images', label: copy.imageTotal, value: imageCount },
+    { key: 'points', label: copy.pointTotal, value: pointCount },
   ];
 
   return (
-    <div className="report-total-comparison" aria-label="图片总量与点位总量比较">
+    <div className="report-total-comparison" aria-label={copy.totalComparison}>
       <p className="report-panel-label">
         <span>TOTAL IMAGE / POINT</span>
-        <strong>图片/点位量</strong>
+        <strong>{copy.imagePointTotal}</strong>
       </p>
       {items.map((item, index) => (
         <div className={`report-comparison-row ${item.key}`} key={item.key}>
@@ -497,29 +523,31 @@ function TotalComparison({
       ))}
       <div className="report-comparison-ratio">
         <strong><AnimatedNumber active={active} value={ratio} decimals={2} /></strong>
-        <span>张图片 / 点位</span>
+        <span>{copy.imagesPerPoint}</span>
       </div>
     </div>
   );
 }
 
 function UploadChart({ active, items }: { active: boolean; items: ReportModel['uploadTypes'] }) {
+  const { locale } = useReportLocale();
+  const copy = ATLOS_COPY[locale];
   const maximum = Math.max(...items.map((item) => item.count), 1);
   if (items.length === 0) {
-    return <div className="report-chart-empty">本周期暂无可展示的上传分类。</div>;
+    return <div className="report-chart-empty">{copy.noUploadTypes}</div>;
   }
 
   return (
-    <div className="report-upload-type-grid" aria-label="八类影像数量对比">
+    <div className="report-upload-type-grid" aria-label={copy.typeComparison}>
       {items.map((item, index) => {
         const width = item.count > 0 ? Math.max(8, (item.count / maximum) * 100) : 0;
         return (
           <article
             className="report-upload-type-row"
             key={item.key}
-            aria-label={`${item.name}，${formatInteger(item.count)} 张`}
+            aria-label={`${displayTypeName(item.key, item.name, locale)}${copy.separator}${formatReportInteger(item.count, locale)}${copy.imageUnit}`}
           >
-            <img src={TYPE_ICONS[item.key]} alt="" title={item.name} />
+            <img src={TYPE_ICONS[item.key]} alt="" title={displayTypeName(item.key, item.name, locale)} />
             <div className="report-upload-type-track">
               <span style={{
                 '--chart-value': `${width}%`,
@@ -538,45 +566,99 @@ function DailyUploadChart({ active, items }: {
   active: boolean;
   items: ReportModel['dailyUploads'];
 }) {
-  const maximum = Math.max(...items.map((item) => item.count), 1);
-  const total = items.reduce((sum, item) => sum + item.count, 0);
-  const average = items.length > 0 ? total / items.length : 0;
+  const { locale } = useReportLocale();
+  const copy = ATLOS_COPY[locale];
+  const [range, setRange] = useState<UploadTrendRange>('90');
+  const [showStale, setShowStale] = useState(false);
+  const visibleItems = useMemo(() => {
+    if (range === 'all') return items;
+    return items.slice(-Number(range));
+  }, [items, range]);
+  const itemTotal = (item: ReportModel['dailyUploads'][number]) => (
+    item.count + item.staleCount
+  );
+  const maximum = Math.max(...visibleItems.map(itemTotal), 1);
+  const total = visibleItems.reduce((sum, item) => sum + itemTotal(item), 0);
+  const average = visibleItems.length > 0 ? total / visibleItems.length : 0;
+  const rangeLabel = range === 'all' ? 'ALL TIME' : `${range} DAY`;
+  const chartStyle = {
+    '--chart-min-width': `${Math.max(620, visibleItems.length * 5)}px`,
+    '--day-count': visibleItems.length,
+  } as CSSProperties;
 
   return (
     <div className="report-daily-section">
       <div className="report-daily-heading">
         <div>
-          <span>90 DAY UPLOAD ACTIVITY</span>
-          <h2>每日上传数量</h2>
+          <span>{rangeLabel} UPLOAD ACTIVITY</span>
+          <h2>{copy.dailyUploads}</h2>
         </div>
-        <div className="report-daily-summary" aria-label="九十天上传统计">
-          <p><span>合计</span><strong><AnimatedNumber active={active} value={total} /></strong></p>
-          <p><span>日均</span><strong><AnimatedNumber active={active} value={average} decimals={1} /></strong></p>
-          <p><span>峰值</span><strong><AnimatedNumber active={active} value={maximum} /></strong></p>
+        <div className="report-daily-controls">
+          <div className="report-daily-range-tabs" role="group" aria-label={copy.rangeLabel}>
+            {UPLOAD_TREND_RANGES.map((item) => (
+              <button
+                key={item}
+                type="button"
+                className={range === item ? 'active' : ''}
+                aria-pressed={range === item}
+                onClick={() => setRange(item)}
+              >
+                {item === 'all' ? copy.all : `${item}${copy.daySuffix}`}
+              </button>
+            ))}
+          </div>
+          <label className="report-stale-toggle">
+            <input
+              type="checkbox"
+              checked={showStale}
+              onChange={(event) => setShowStale(event.target.checked)}
+            />
+            <span aria-hidden="true" />
+            {copy.showStale}
+          </label>
         </div>
       </div>
-      <div className="report-daily-chart" aria-label="最近九十天每日图片上传柱状图">
-        {items.map((item, index) => {
-          const height = item.count > 0 ? Math.max(3, (item.count / maximum) * 100) : 0;
-          return (
-            <div
-              className={`report-daily-bar${isRedUploadDay(item.date) ? ' is-red-day' : ''}`}
-              key={item.date}
-              title={`${formatChartDate(item.date)} · ${formatInteger(item.count)} 张`}
-              aria-label={`${formatChartDate(item.date)}，${formatInteger(item.count)} 张`}
-            >
-              <span style={{
-                '--chart-value': `${height}%`,
-                '--chart-delay': `${index * 12}ms`,
-              } as ChartStyle} />
-            </div>
-          );
-        })}
+      <div className="report-daily-summary" aria-label={copy.selectedStats}>
+        <p><span>{copy.total}</span><strong><AnimatedNumber active={active} value={total} /></strong></p>
+        <p><span>{copy.average}</span><strong><AnimatedNumber active={active} value={average} decimals={1} /></strong></p>
+        <p><span>{copy.peak}</span><strong><AnimatedNumber active={active} value={maximum} /></strong></p>
       </div>
-      <div className="report-daily-axis" aria-hidden="true">
-        <span>{formatChartDate(items[0]?.date ?? '')}</span>
-        <span>90 DAYS</span>
-        <span>{formatChartDate(items.at(-1)?.date ?? '')}</span>
+      <div className="report-daily-chart-scroll">
+        <div
+          className="report-daily-chart"
+          style={chartStyle}
+          aria-label={`${range === 'all' ? copy.all : `${copy.recent}${range}${copy.daySuffix}`}${copy.dailyChart}${showStale ? copy.includesStale : ''}`}
+        >
+          {visibleItems.map((item, index) => {
+            const activeHeight = item.count > 0 ? Math.max(3, (item.count / maximum) * 100) : 0;
+            const staleHeight = item.staleCount > 0 ? Math.max(3, (item.staleCount / maximum) * 100) : 0;
+            const description = `active ${formatReportInteger(item.count, locale)}${copy.imageUnit}${copy.separator}stale ${formatReportInteger(item.staleCount, locale)}${copy.imageUnit}`;
+            return (
+              <div
+                className={`report-daily-bar${isRedUploadDay(item.date) ? ' is-red-day' : ''}`}
+                key={item.date}
+                title={`${formatChartDate(item.date)} · ${description}`}
+                aria-label={`${formatChartDate(item.date)}，${description}`}
+              >
+                <span style={{
+                  '--chart-value': `${activeHeight}%`,
+                  '--chart-delay': `${index * 12}ms`,
+                } as ChartStyle} />
+                {showStale && (
+                  <i style={{
+                    '--chart-value': `${staleHeight}%`,
+                    '--chart-delay': `${index * 12}ms`,
+                  } as ChartStyle} />
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <div className="report-daily-axis" style={chartStyle} aria-hidden="true">
+          <span>{formatChartDate(visibleItems[0]?.date ?? '')}</span>
+          <span>{range === 'all' ? 'ALL' : `${range} DAYS`}</span>
+          <span>{formatChartDate(visibleItems.at(-1)?.date ?? '')}</span>
+        </div>
       </div>
     </div>
   );
@@ -586,11 +668,15 @@ function UgcLikeSection({
   sectionRef,
   active,
   report,
+  onAdvance,
 }: {
   sectionRef: RefObject<HTMLElement | null>;
   active: boolean;
   report: UgcLikeReport;
+  onAdvance: () => void;
 }) {
+  const { locale } = useReportLocale();
+  const copy = ATLOS_COPY[locale];
   const daily = fillDailyUgcLikes(report.daily).slice(-90);
   const maximum = Math.max(...daily.map((item) => item.imageLikes + item.commentLikes), 1);
   const recentTotal = daily.reduce(
@@ -598,29 +684,34 @@ function UgcLikeSection({
     0,
   );
   const mix = [
-    { key: 'images', label: '图片点赞', value: report.imageLikes },
-    { key: 'comments', label: '评论点赞', value: report.commentLikes },
-    { key: 'dislikes', label: '评论点踩', value: report.commentDislikes },
+    { key: 'images', label: copy.imageLikes, value: report.imageLikes },
+    { key: 'comments', label: copy.commentLikes, value: report.commentLikes },
+    { key: 'dislikes', label: copy.commentDislikes, value: report.commentDislikes },
   ];
   const mixMaximum = Math.max(...mix.map((item) => item.value), 1);
 
   return (
     <section
       ref={sectionRef}
-      className="report-band report-likes-band"
+      className="report-band report-likes-band report-click-page"
       data-visible={active}
+      onClick={(event) => {
+        const target = event.target;
+        if (target instanceof Element && target.closest('a, button, input, select, textarea')) return;
+        onAdvance();
+      }}
     >
       <div className="report-likes-heading">
         <div>
           <span>UGC REACTION SIGNAL</span>
-          <h2>UGC 点赞情况</h2>
-          <p>{formatDatePeriod(report.firstReactionDate, report.lastReactionDate)}</p>
+          <h2>{copy.reactionTitle}</h2>
+          <p>{formatDatePeriod(report.firstReactionDate, report.lastReactionDate, locale)}</p>
         </div>
-        <div className="report-likes-metrics" aria-label="UGC 点赞核心数据">
-          <Metric label="当前有效点赞" value={report.totalLikes} />
-          <Metric label="获赞 UGC" value={report.likedSubmissions} />
-          <Metric label="参与用户" value={report.uniqueReactors} />
-          <Metric label="评论点踩" value={report.commentDislikes} />
+        <div className="report-likes-metrics" aria-label={copy.reactionMetrics}>
+          <Metric label={copy.validLikes} value={report.totalLikes} />
+          <Metric label={copy.likedUgc} value={report.likedSubmissions} />
+          <Metric label={copy.users} value={report.uniqueReactors} />
+          <Metric label={copy.commentDislikes} value={report.commentDislikes} />
         </div>
       </div>
 
@@ -629,14 +720,14 @@ function UgcLikeSection({
           <div className="report-likes-panel-heading">
             <div>
               <span>90 DAY LIKE ACTIVITY</span>
-              <h3>每日有效点赞</h3>
+              <h3>{copy.dailyLikes}</h3>
             </div>
             <div>
-              <span>90 天合计</span>
+              <span>{copy.daysTotal}</span>
               <strong><AnimatedNumber active={active} value={recentTotal} /></strong>
             </div>
           </div>
-          <div className="report-like-chart" aria-label="最近九十天图片与评论有效点赞数量">
+          <div className="report-like-chart" aria-label={copy.likeChart}>
             {daily.map((item, index) => {
               const count = item.imageLikes + item.commentLikes;
               const height = count > 0 ? Math.max(3, (count / maximum) * 100) : 0;
@@ -644,8 +735,8 @@ function UgcLikeSection({
                 <div
                   className="report-like-daily-bar"
                   key={item.date}
-                  title={`${formatChartDate(item.date)} · 图片 ${formatInteger(item.imageLikes)} / 评论 ${formatInteger(item.commentLikes)}`}
-                  aria-label={`${formatChartDate(item.date)}，图片点赞 ${formatInteger(item.imageLikes)}，评论点赞 ${formatInteger(item.commentLikes)}`}
+                  title={`${formatChartDate(item.date)} · ${copy.images} ${formatReportInteger(item.imageLikes, locale)} / ${copy.comments} ${formatReportInteger(item.commentLikes, locale)}`}
+                  aria-label={`${formatChartDate(item.date)}${copy.separator}${copy.imageLikes} ${formatReportInteger(item.imageLikes, locale)}${copy.separator}${copy.commentLikes} ${formatReportInteger(item.commentLikes, locale)}`}
                 >
                   <span style={{
                     '--chart-value': `${height}%`,
@@ -668,7 +759,7 @@ function UgcLikeSection({
             <div className="report-likes-panel-heading">
               <div>
                 <span>CURRENT REACTION MIX</span>
-                <h3>反馈构成</h3>
+                <h3>{copy.reactionMix}</h3>
               </div>
             </div>
             <div className="report-like-mix-list">
@@ -695,12 +786,14 @@ function UgcLikeSection({
 }
 
 function MostLikedImage({ image }: { image: UgcLikeReport['topImage'] }) {
+  const { locale } = useReportLocale();
+  const copy = ATLOS_COPY[locale];
   return (
     <div className="report-popular-image">
       <div className="report-likes-panel-heading">
         <div>
           <span>MOST LIKED IMAGE</span>
-          <h3>最受欢迎图片</h3>
+          <h3>{copy.mostLiked}</h3>
         </div>
       </div>
       {image ? (
@@ -709,28 +802,28 @@ function MostLikedImage({ image }: { image: UgcLikeReport['topImage'] }) {
           href={image.pointUrl}
           target="_blank"
           rel="noreferrer"
-          aria-label={`在地图中查看最受欢迎图片，${formatInteger(image.likeCount)} 个赞`}
+          aria-label={`${copy.viewMostLiked}${copy.separator}${formatReportInteger(image.likeCount, locale)} ${copy.likes}`}
         >
           <span className="report-popular-image-media">
             <img
               src={getPublicImageUrl(image.filePath)}
-              alt={`${displayPoiType(image.poiType)}点位的用户图片`}
+              alt={`${displayPoiType(image.poiType, locale)} ${copy.images}`}
             />
           </span>
           <span className="report-popular-image-meta">
             <span>
-              <strong>{displayPoiType(image.poiType)}</strong>
+              <strong>{displayPoiType(image.poiType, locale)}</strong>
               <small>POINT {image.markerId}</small>
             </span>
             <span>
-              <strong>{formatInteger(image.likeCount)}</strong>
-              <small>点赞</small>
+              <strong>{formatReportInteger(image.likeCount, locale)}</strong>
+              <small>{copy.likes}</small>
             </span>
           </span>
-          <span className="report-popular-image-action">查看地图点位</span>
+          <span className="report-popular-image-action">{copy.viewPoint}</span>
         </a>
       ) : (
-        <div className="report-popular-image-empty">暂无公开图片点赞数据</div>
+        <div className="report-popular-image-empty">{copy.noLikedImage}</div>
       )}
     </div>
   );
@@ -745,6 +838,8 @@ function ContributorSection({
   active: boolean;
   contributors: ContributorStats[];
 }) {
+  const { locale } = useReportLocale();
+  const copy = ATLOS_COPY[locale];
   const [expanded, setExpanded] = useState(false);
   const [sort, setSort] = useState<ContributorSort>('contributions');
   const sortedContributors = useMemo(
@@ -778,24 +873,24 @@ function ContributorSection({
       <div className="report-contributors-heading">
         <div>
           <span>UGC CONTRIBUTOR RANKING</span>
-          <h2>最活跃贡献者</h2>
-          <p>{contributorSortDescription(sort)}</p>
+          <h2>{copy.contributorsTitle}</h2>
+          <p>{contributorSortDescription(sort, locale)}</p>
           <ContributorSortControl value={sort} onChange={setSort} />
         </div>
-        <div className="report-contributors-summary" aria-label="贡献者统计概览">
-          <p><span>贡献者</span><strong><AnimatedNumber active={active} value={contributors.length} /></strong></p>
-          <p><span>UGC 提交</span><strong><AnimatedNumber active={active} value={totalContributions} /></strong></p>
-          <p><span>人均贡献</span><strong><AnimatedNumber active={active} value={average} decimals={1} /></strong></p>
+        <div className="report-contributors-summary" aria-label={copy.contributorSummary}>
+          <p><span>{copy.contributors}</span><strong><AnimatedNumber active={active} value={contributors.length} /></strong></p>
+          <p><span>{copy.ugcSubmissions}</span><strong><AnimatedNumber active={active} value={totalContributions} /></strong></p>
+          <p><span>{copy.perContributor}</span><strong><AnimatedNumber active={active} value={average} decimals={1} /></strong></p>
         </div>
       </div>
 
-      <div className="report-contributor-list" aria-label="最活跃的十名贡献者">
+      <div className="report-contributor-list" aria-label={copy.topContributors}>
         <div className="report-contributor-columns" aria-hidden="true">
-          <span>排名 / 用户名 / OEM ID</span>
+          <span>{copy.rankUser}</span>
           <span>KARMA</span>
-          <span>图片 / 评论</span>
-          <span>获赞</span>
-          <span>贡献量</span>
+          <span>{copy.imageComments}</span>
+          <span>{copy.receivedLikes}</span>
+          <span>{copy.contributions}</span>
         </div>
         {topContributors.map((contributor, index) => (
           <button
@@ -807,28 +902,29 @@ function ContributorSection({
             <span className="report-contributor-identity">
               <b>{String(index + 1).padStart(2, '0')}</b>
               <span>
-                <strong>{contributorUsername(contributor)}</strong>
-                <small>OEM {contributorOemId(contributor)}</small>
+                <strong>{contributorUsername(contributor, locale)}</strong>
+                <small>OEM {contributorOemId(contributor, locale)}</small>
               </span>
             </span>
             <strong
               className="report-contributor-karma"
-              aria-label={`Karma ${contributor.karma === null ? '未知' : formatInteger(contributor.karma)}`}
+              aria-label={`Karma ${contributor.karma === null ? copy.unknown : formatReportInteger(contributor.karma, locale)}`}
             >
-              {contributor.karma === null ? '-' : formatInteger(contributor.karma)}
+              {contributor.karma === null ? '-' : formatReportInteger(contributor.karma, locale)}
             </strong>
             <span className="report-contributor-split">
-              <b><small>图片</small>{formatInteger(contributor.imageCount)}</b>
+              <b><small>{copy.images}</small>{formatReportInteger(contributor.imageCount, locale)}</b>
               <i>/</i>
-              <b><small>评论</small>{formatInteger(contributor.commentCount)}</b>
+              <b><small>{copy.comments}</small>{formatReportInteger(contributor.commentCount, locale)}</b>
             </span>
             <strong
               className="report-contributor-likes"
-              aria-label={`获赞 ${formatInteger(contributor.likeCount)}`}
+              aria-label={`${copy.receivedLikes} ${formatReportInteger(contributor.likeCount, locale)}`}
+              data-label={copy.receivedLikes}
             >
-              {formatInteger(contributor.likeCount)}
+              {formatReportInteger(contributor.likeCount, locale)}
             </strong>
-            <span className="report-contributor-total" aria-label={`总贡献 ${formatInteger(contributor.totalCount)}`}>
+            <span className="report-contributor-total" aria-label={`${copy.totalContribution} ${formatReportInteger(contributor.totalCount, locale)}`} data-label={copy.contributions}>
               <span aria-hidden="true">
                 <i style={{
                   '--chart-value': `${Math.max(4, (contributor.totalCount / maximum) * 100)}%`,
@@ -841,13 +937,15 @@ function ContributorSection({
         ))}
       </div>
 
-      <button
-        type="button"
-        className="report-contributors-expand"
-        onClick={() => setExpanded(true)}
-      >
-        查看全部 {formatInteger(contributors.length)} 名贡献者
-      </button>
+      <div className="report-contributors-actions">
+        <button
+          type="button"
+          className="report-contributors-expand"
+          onClick={() => setExpanded(true)}
+        >
+          {copy.viewAll} {formatReportInteger(contributors.length, locale)}{copy.contributorUnit}
+        </button>
+      </div>
 
       {expanded && (
         <ContributorDialog
@@ -872,6 +970,8 @@ function ContributorDialog({
   onSortChange: (sort: ContributorSort) => void;
   onClose: () => void;
 }) {
+  const { locale } = useReportLocale();
+  const copy = ATLOS_COPY[locale];
   return (
     <div
       className="report-contributor-dialog-backdrop"
@@ -889,36 +989,36 @@ function ContributorDialog({
         <header>
           <div>
             <span>FULL CONTRIBUTOR STATISTICS</span>
-            <h2 id="contributor-dialog-title">完整贡献者统计</h2>
+            <h2 id="contributor-dialog-title">{copy.fullStats}</h2>
           </div>
           <ContributorSortControl value={sort} onChange={onSortChange} compact />
-          <button type="button" onClick={onClose} aria-label="关闭完整贡献者统计" autoFocus>×</button>
+          <button type="button" onClick={onClose} aria-label={copy.closeStats} autoFocus>×</button>
         </header>
         <div className="report-contributor-table-wrap">
           <table className="report-contributor-table">
             <thead>
               <tr>
-                <th>排名</th>
-                <th>用户名</th>
+                <th>{copy.rank}</th>
+                <th>{copy.username}</th>
                 <th>OEM ID</th>
                 <th>Karma</th>
-                <th>图片</th>
-                <th>评论</th>
-                <th>获赞</th>
-                <th>总贡献</th>
+                <th>{copy.images}</th>
+                <th>{copy.comments}</th>
+                <th>{copy.receivedLikes}</th>
+                <th>{copy.totalContribution}</th>
               </tr>
             </thead>
             <tbody>
               {contributors.map((contributor, index) => (
                 <tr key={contributor.userId}>
                   <td>{index + 1}</td>
-                  <td><strong>{contributorUsername(contributor)}</strong></td>
-                  <td>{contributorOemId(contributor)}</td>
-                  <td>{contributor.karma === null ? '-' : formatInteger(contributor.karma)}</td>
-                  <td>{formatInteger(contributor.imageCount)}</td>
-                  <td>{formatInteger(contributor.commentCount)}</td>
-                  <td><strong>{formatInteger(contributor.likeCount)}</strong></td>
-                  <td><strong>{formatInteger(contributor.totalCount)}</strong></td>
+                  <td><strong>{contributorUsername(contributor, locale)}</strong></td>
+                  <td>{contributorOemId(contributor, locale)}</td>
+                  <td>{contributor.karma === null ? '-' : formatReportInteger(contributor.karma, locale)}</td>
+                  <td>{formatReportInteger(contributor.imageCount, locale)}</td>
+                  <td>{formatReportInteger(contributor.commentCount, locale)}</td>
+                  <td><strong>{formatReportInteger(contributor.likeCount, locale)}</strong></td>
+                  <td><strong>{formatReportInteger(contributor.totalCount, locale)}</strong></td>
                 </tr>
               ))}
             </tbody>
@@ -938,16 +1038,18 @@ function ContributorSortControl({
   onChange: (sort: ContributorSort) => void;
   compact?: boolean;
 }) {
+  const { locale } = useReportLocale();
+  const copy = ATLOS_COPY[locale];
   const options: Array<{ value: ContributorSort; label: string }> = [
-    { value: 'contributions', label: '贡献量' },
-    { value: 'likes', label: '获赞' },
+    { value: 'contributions', label: copy.contributions },
+    { value: 'likes', label: copy.receivedLikes },
     { value: 'karma', label: 'Karma' },
   ];
 
   return (
     <div className="report-contributor-sort" data-compact={compact || undefined}>
-      <span>排序</span>
-      <div role="group" aria-label="贡献者排序方式">
+      <span>{copy.sort}</span>
+      <div role="group" aria-label={copy.sortLabel}>
         {options.map((option) => (
           <button
             type="button"
@@ -963,10 +1065,10 @@ function ContributorSortControl({
   );
 }
 
-function contributorSortDescription(sort: ContributorSort): string {
-  if (sort === 'likes') return '按图片与评论收到的点赞总量排序';
-  if (sort === 'karma') return '按当前 Karma 分数排序';
-  return '按图片与评论提交总量排序';
+function contributorSortDescription(sort: ContributorSort, locale: ReportLocale): string {
+  if (sort === 'likes') return ATLOS_COPY[locale].byLikes;
+  if (sort === 'karma') return ATLOS_COPY[locale].byKarma;
+  return ATLOS_COPY[locale].byContributions;
 }
 
 function sortContributorStats(
@@ -997,17 +1099,17 @@ function compareNullableNumbersDescending(left: number | null, right: number | n
   return right - left;
 }
 
-function contributorUsername(contributor: ContributorStats): string {
-  return contributor.nickname?.trim() || '未设置用户名';
+function contributorUsername(contributor: ContributorStats, locale: ReportLocale = 'zh-CN'): string {
+  return contributor.nickname?.trim() || ATLOS_COPY[locale].noUsername;
 }
 
-function contributorOemId(contributor: ContributorStats): string {
-  return contributor.publicUid?.trim() || '未分配';
+function contributorOemId(contributor: ContributorStats, locale: ReportLocale): string {
+  return contributor.publicUid?.trim() || ATLOS_COPY[locale].unassigned;
 }
 
-function displayPoiType(value: string): string {
+function displayPoiType(value: string, locale: ReportLocale): string {
   const key = canonicalUploadTypeKey(value);
-  return TYPE_NAMES[key] ?? value.replace(/[_-]+/g, ' ');
+  return displayTypeName(key, value.replace(/[_-]+/g, ' '), locale);
 }
 
 function fillDailyUgcLikes(rows: UgcLikeReport['daily']): UgcLikeReport['daily'] {
@@ -1028,8 +1130,8 @@ function fillDailyUgcLikes(rows: UgcLikeReport['daily']): UgcLikeReport['daily']
   });
 }
 
-function formatDatePeriod(first: string | null, last: string | null): string {
-  if (!first || !last) return '暂无互动区间';
+function formatDatePeriod(first: string | null, last: string | null, locale: ReportLocale): string {
+  if (!first || !last) return ATLOS_COPY[locale].noReactionPeriod;
   return `${formatChartDate(first)} - ${formatChartDate(last)}`;
 }
 
@@ -1042,11 +1144,12 @@ function AnimatedNumber({
   value: number;
   decimals?: number;
 }) {
+  const { locale } = useReportLocale();
   const [displayValue, setDisplayValue] = useState(0);
-  const formatter = useMemo(() => new Intl.NumberFormat('zh-CN', {
+  const formatter = useMemo(() => new Intl.NumberFormat(locale, {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
-  }), [decimals]);
+  }), [decimals, locale]);
 
   useEffect(() => {
     if (!active) return undefined;
@@ -1096,25 +1199,28 @@ function useInView<T extends HTMLElement>() {
 }
 
 function ReportLoading() {
+  const { locale } = useReportLocale();
   return (
     <main className="report-loading" aria-live="polite">
       <div className="report-loader-mark" aria-hidden="true"><span /></div>
       <p>CONNECTING TO TERRAIN ARCHIVE</p>
-      <strong>正在汇总生产环境影像数据</strong>
+      <strong>{ATLOS_COPY[locale].loading}</strong>
       <div className="report-loader-track"><span /></div>
     </main>
   );
 }
 
 function ReportError({ message, onRetry }: { message: string; onRetry: () => void }) {
+  const { locale } = useReportLocale();
+  const copy = ATLOS_COPY[locale];
   return (
     <main className="report-error-state">
       <span>DATA LINK / OFFLINE</span>
-      <h1>暂时无法读取影像统计</h1>
+      <h1>{copy.errorTitle}</h1>
       <p>{message}</p>
       <div>
-        <button type="button" onClick={onRetry}>重新读取</button>
-        <a href="/">前往管理登录</a>
+        <button type="button" onClick={onRetry}>{copy.retry}</button>
+        <a href="/">{copy.admin}</a>
       </div>
     </main>
   );
@@ -1123,14 +1229,16 @@ function ReportError({ message, onRetry }: { message: string; onRetry: () => voi
 function buildReportModel(
   report: ImageCoverageReport,
   submissions: PendingSubmission[],
-  stats: ReviewSubmissionStats | null,
   ugcLikes: UgcLikeReport,
+  staleSubmissions: PendingSubmission[],
 ): ReportModel {
   const imageSubmissions = submissions.filter((submission) => submission.kind === 'image');
-  const imageCount = stats?.byKind?.find((entry) => entry.kind === 'image')?.count
-    ?? imageSubmissions.length;
-  const dailyUploads = buildDailyUploadCounts(imageSubmissions);
-  const recentImageCount = dailyUploads.reduce((sum, item) => sum + item.count, 0);
+  const staleImageSubmissions = staleSubmissions.filter((submission) => submission.kind === 'image');
+  const allSubmissions = [...submissions, ...staleSubmissions];
+  const allImageSubmissions = [...imageSubmissions, ...staleImageSubmissions];
+  const imageCount = allImageSubmissions.length;
+  const dailyUploads = buildDailyUploadCounts(imageSubmissions, staleImageSubmissions);
+  const uploadCount = allImageSubmissions.length;
   const uploadTypeCounts = new Map<string, number>();
   for (const submission of imageSubmissions) {
     const key = canonicalUploadTypeKey(submission.poiType);
@@ -1139,7 +1247,7 @@ function buildReportModel(
 
   const uploadTypes = UPLOAD_TYPE_ORDER.map((key) => ({
     key,
-    name: TYPE_NAMES[key],
+    name: TYPE_NAMES['zh-CN'][key],
     count: uploadTypeCounts.get(key) ?? 0,
   }));
 
@@ -1180,7 +1288,7 @@ function buildReportModel(
   const otherTypes = [...otherTypeGroups.entries()]
     .map(([key, group]) => ({
       key,
-      name: TYPE_NAMES[key] ?? group.name,
+      name: TYPE_NAMES['zh-CN'][key] ?? group.name,
       metric: sumMetrics(group.metrics),
     }))
     .filter((item) => item.metric.totalPoints > 0)
@@ -1189,7 +1297,7 @@ function buildReportModel(
 
   return {
     report,
-    uploadCount: recentImageCount,
+    uploadCount,
     imageCount,
     coverageRate: report.total.coverageRate,
     coreCoverageRate,
@@ -1205,7 +1313,7 @@ function buildReportModel(
     otherTypes,
     dailyUploads,
     ugcLikes,
-    contributors: buildContributorStats(submissions, ugcLikes.contributorLikes ?? []),
+    contributors: buildContributorStats(allSubmissions, ugcLikes.contributorLikes ?? []),
   };
 }
 
@@ -1244,24 +1352,44 @@ function buildContributorStats(
   return sortContributorStats([...contributors.values()], 'contributions');
 }
 
-function buildDailyUploadCounts(submissions: PendingSubmission[]): ReportModel['dailyUploads'] {
+function buildDailyUploadCounts(
+  submissions: PendingSubmission[],
+  staleSubmissions: PendingSubmission[],
+): ReportModel['dailyUploads'] {
   const chinaOffsetMs = 8 * 60 * 60 * 1000;
   const chinaToday = new Date(Date.now() + chinaOffsetMs);
   chinaToday.setUTCHours(0, 0, 0, 0);
-
-  const items = Array.from({ length: 90 }, (_, index) => {
-    const date = new Date(chinaToday);
-    date.setUTCDate(date.getUTCDate() - (89 - index));
-    return { date: date.toISOString().slice(0, 10), count: 0 };
+  const minimumStart = new Date(chinaToday);
+  minimumStart.setUTCDate(minimumStart.getUTCDate() - 89);
+  const earliestCreatedAt = [...submissions, ...staleSubmissions].reduce<Date | null>((earliest, submission) => {
+    const createdAt = new Date(submission.createdAt);
+    if (!Number.isFinite(createdAt.getTime())) return earliest;
+    const chinaDate = new Date(createdAt.getTime() + chinaOffsetMs);
+    chinaDate.setUTCHours(0, 0, 0, 0);
+    return !earliest || chinaDate < earliest ? chinaDate : earliest;
+  }, null);
+  const startDate = earliestCreatedAt && earliestCreatedAt < minimumStart
+    ? earliestCreatedAt
+    : minimumStart;
+  const dayCount = Math.floor((chinaToday.getTime() - startDate.getTime()) / 86_400_000) + 1;
+  const items = Array.from({ length: dayCount }, (_, index) => {
+    const date = new Date(startDate);
+    date.setUTCDate(date.getUTCDate() + index);
+    return { date: date.toISOString().slice(0, 10), count: 0, staleCount: 0 };
   });
   const counts = new Map(items.map((item) => [item.date, item]));
 
-  for (const submission of submissions) {
-    const createdAt = new Date(submission.createdAt);
-    if (!Number.isFinite(createdAt.getTime())) continue;
-    const chinaDate = new Date(createdAt.getTime() + chinaOffsetMs).toISOString().slice(0, 10);
-    const item = counts.get(chinaDate);
-    if (item) item.count += 1;
+  for (const [rows, key] of [
+    [submissions, 'count'],
+    [staleSubmissions, 'staleCount'],
+  ] as const) {
+    for (const submission of rows) {
+      const createdAt = new Date(submission.createdAt);
+      if (!Number.isFinite(createdAt.getTime())) continue;
+      const chinaDate = new Date(createdAt.getTime() + chinaOffsetMs).toISOString().slice(0, 10);
+      const item = counts.get(chinaDate);
+      if (item) item[key] += 1;
+    }
   }
 
   return items;
@@ -1298,8 +1426,29 @@ function categoryName(key: string): string {
   return key;
 }
 
-function formatInteger(value: number): string {
-  return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 }).format(value);
+function displayTypeName(key: string, fallback: string, locale: ReportLocale): string {
+  return TYPE_NAMES[locale][key] ?? (locale === 'en' ? humanizeKey(key, fallback) : fallback);
+}
+
+function displayCategoryName(key: string, fallback: string, locale: ReportLocale): string {
+  const names: Record<ReportLocale, Record<string, string>> = {
+    'zh-CN': { collection: '收集物', archives: '档案', exploration: '探索' },
+    'zh-HK': { collection: '收集物', archives: '檔案', exploration: '探索' },
+    en: { collection: 'Collection', archives: 'Archives', exploration: 'Exploration' },
+  };
+  return names[locale][key] ?? (locale === 'en' ? humanizeKey(key, fallback) : fallback);
+}
+
+function displayRegionName(key: string, fallback: string, locale: ReportLocale): string {
+  const normalized = key.trim().toUpperCase();
+  if (normalized === 'WL') return locale === 'en' ? 'Wuling' : '武陵';
+  if (normalized === 'VL') return locale === 'en' ? 'Valley IV' : locale === 'zh-HK' ? '四號谷地' : '四号谷地';
+  return locale === 'en' ? humanizeKey(key, fallback) : fallback;
+}
+
+function humanizeKey(key: string, fallback: string): string {
+  const source = [...fallback].every((character) => character.charCodeAt(0) <= 127) ? fallback : key;
+  return source.replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function formatChartDate(value: string): string {

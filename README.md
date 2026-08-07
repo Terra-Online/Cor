@@ -21,8 +21,11 @@ Pages:
 Default API routing:
 
 - Authentication -> `http://localhost:8787/auth/*`
-- Moderation and upload data -> `localhost:5429/api/*` -> `https://api.opendfieldmap.org/*`
+- Moderation and upload data -> `localhost:5429/api/*` -> `http://127.0.0.1:8787/*`
 - `https://admin.opendfieldmap.org` -> `https://api.opendfieldmap.org`
+
+`pnpm preview` keeps `/api/*` pointed at `https://api.opendfieldmap.org` so a
+production build can be checked against the production API locally.
 
 Local overrides belong in `.env.development.local`; production builds must leave
 `VITE_AUTH_API_BASE` and `VITE_DATA_API_BASE` unset so both resolve to

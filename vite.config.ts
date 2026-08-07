@@ -1,13 +1,16 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-const productionApiProxy = {
-  target: 'https://api.opendfieldmap.org',
+const createApiProxy = (target: string) => ({
+  target,
   changeOrigin: true,
   secure: true,
   cookieDomainRewrite: '',
   rewrite: (path: string) => path.replace(/^\/api/, ''),
-};
+});
+
+const localApiProxy = createApiProxy('http://127.0.0.1:8787');
+const productionApiProxy = createApiProxy('https://api.opendfieldmap.org');
 
 export default defineConfig({
   plugins: [react()],
@@ -16,7 +19,7 @@ export default defineConfig({
     port: 5429,
     strictPort: true,
     proxy: {
-      '/api': productionApiProxy,
+      '/api': localApiProxy,
     },
   },
   preview: {
