@@ -198,6 +198,7 @@ export type OrphanImageReport = {
 };
 
 export type ListPendingSubmissionsOptions = {
+  submissionId?: string;
   statuses?: ModerationStatus[];
   from?: string;
   to?: string;
@@ -290,6 +291,9 @@ export async function listPendingSubmissions(options: ListPendingSubmissionsOpti
   limit: number;
 }> {
   const params = new URLSearchParams();
+  if (options.submissionId) {
+    params.set('submissionId', options.submissionId);
+  }
   if (options.statuses && options.statuses.length > 0) {
     params.set('status', options.statuses.join(','));
   }

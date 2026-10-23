@@ -67,6 +67,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [busyAction, setBusyAction] = useState<BusyAction>(null);
   const [error, setError] = useState<string | null>(null);
+  const [submissionId, setSubmissionId] = useState(() => initialSubmissionId());
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [note, setNote] = useState('');
   const [signInBusy, setSignInBusy] = useState(false);
@@ -143,26 +144,43 @@ export default function App() {
     setLoading(true);
     setError(null);
     try {
-      const result = await listPendingSubmissions({
+      const result = await listPendingSubmissions(submissionId ? { submissionId, limit: 1 } : {
         from: queryDateRange.startDate.toISOString(),
         to: queryDateRange.endDate.toISOString(),
         limit: MODERATION_DATE_FETCH_LIMIT,
       });
-      const pending = result.items;
+      // Also verify the ID locally while Bayes and Cor may be deployed separately.
+      const pending = submissionId ? result.items.filter((item) => item.id === submissionId) : result.items;
       setItems(pending);
-      setServerStats(result.stats);
+      setServerStats(submissionId ? null : result.stats);
       setResultLimit(result.limit);
       setSelectedIds((current) => current.filter((id) => pending.some((item) => item.id === id)));
       setSelectedId((current) => {
         if (current && pending.some((item) => item.id === current)) return current;
         return pending[0]?.id ?? null;
       });
+      if (submissionId && pending.length === 0) {
+        setError(`Submission ${submissionId} was not found. It may have been deleted.`);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load moderation queue.');
     } finally {
       setLoading(false);
     }
-  }, [queryDateRange]);
+  }, [queryDateRange, submissionId]);
+
+  const returnToQueue = () => {
+    const url = new URL(window.location.href);
+    url.searchParams.delete('submissionId');
+    window.history.replaceState(null, '', url);
+    setSubmissionId(null);
+    setItems([]);
+    setSelectedId(null);
+    setSelectedIds([]);
+    setServerStats(null);
+    setNote('');
+    setError(null);
+  };
 
   const refreshDuplicates = useCallback(async () => {
     setDuplicateLoading(true);
@@ -541,7 +559,7 @@ export default function App() {
             Orphans
           </button>
           <button type="button" className="danger-ghost" onClick={() => void archiveTestImageSubmissions()} disabled={loading}>Archive _test</button>
-          {activeView === 'review' && (
+          {activeView === 'review' && !submissionId && (
             <button
               type="button"
               className={commentsOnly ? 'comment-filter active' : 'comment-filter'}
@@ -555,7 +573,15 @@ export default function App() {
       )}
     >
       {error && <div className="error">{error}</div>}
-      {activeView === 'review' ? (
+      {activeView === 'review' && submissionId ? (
+        <section className="duplicate-summary-panel">
+          <div>
+            <h2>Linked submission</h2>
+            <p>{submissionId} · All dates and statuses</p>
+          </div>
+          <button type="button" onClick={returnToQueue} disabled={loading || Boolean(busyAction)}>Back to queue</button>
+        </section>
+      ) : activeView === 'review' ? (
         <>
           <section className="status-strip">
             <button
@@ -669,7 +695,7 @@ export default function App() {
       ) : null}
       {activeView === 'review' && <section className="state-actions">
         <div className="state-action-buttons">{stateActions}</div>
-        <strong>{selectedVisibleItems.length} selected / {visibleItems.length} visible / {uploadStats.total} total</strong>
+        <strong>{selectedVisibleItems.length} selected / {visibleItems.length} visible / {submissionId ? items.length : uploadStats.total} total</strong>
       </section>}
       {activeView === 'review' ? <main className="review-layout">
         <section className="queue">
@@ -850,7 +876,7 @@ export default function App() {
                 <div><span>Updated</span><strong>{formatAuditTime(selected.updatedAt)}</strong></div>
               </div>
               <div className="link-row">
-                <a href={pointShareUrl(selected.poiHash)} target="_blank" rel="noreferrer">Open point in frontend</a>
+                <a href={submissionShareUrl(selected)} target="_blank" rel="noreferrer">Open {selected.kind} in frontend</a>
                 {selected.submitter?.nickname && <span>{selected.submitter.nickname}</span>}
               </div>
               {selected.content && <p className="content">{selected.content}</p>}
@@ -1171,10 +1197,16 @@ function initialDuplicateMarker(): string | null {
 }
 
 function initialView(): AdminView {
+  if (initialSubmissionId()) return 'review';
   if (initialDuplicateMarker()) return 'duplicates';
   if (typeof window === 'undefined') return 'review';
   const view = new URLSearchParams(window.location.search).get('view');
   return view === 'coverage' || view === 'orphans' ? view : 'review';
+}
+
+function initialSubmissionId(): string | null {
+  if (typeof window === 'undefined') return null;
+  return new URLSearchParams(window.location.search).get('submissionId')?.trim() || null;
 }
 
 function formatUserSummary(item: PendingSubmission): string {
@@ -1208,6 +1240,12 @@ function formatFlagCount(value: number | null | undefined): string {
 
 function pointShareUrl(hash: string): string {
   return `https://oem.re/?x=${encodeURIComponent(hash)}`;
+}
+
+function submissionShareUrl(item: PendingSubmission): string {
+  const url = new URL(pointShareUrl(item.poiHash));
+  url.searchParams.set(item.kind === 'image' ? 'imageId' : 'commentId', item.id);
+  return url.toString();
 }
 
 function isAdminRole(role: string | undefined): boolean {

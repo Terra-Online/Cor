@@ -14,6 +14,7 @@ Local server: `http://localhost:5429`
 Pages:
 
 - Admin console: `http://localhost:5429/`
+- Direct submission review: `http://localhost:5429/?submissionId=<submission-id>` (images and comments, independent of the queue's date range and current status)
 - Atlos image report: `http://localhost:5429/report`
 - User registration report: `http://localhost:5429/report/users`
 - Translation report: `http://localhost:5429/report/translations`
