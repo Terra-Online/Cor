@@ -5,18 +5,42 @@ export type AdminUser = {
   nickname?: string;
 };
 
-export type ModerationStatus = 'pending_openai' | 'pending_audit' | 'active' | 'flagged' | 'remove_request' | 'stale';
+export type ModerationStatus = 'pending_openai' | 'pending_audit' | 'active' | 'flagged' | 'stale';
 export const MODERATION_STATUSES: ModerationStatus[] = [
   'pending_openai',
   'pending_audit',
   'active',
   'flagged',
-  'remove_request',
   'stale',
 ];
 export const MODERATION_DATE_FETCH_LIMIT = 10000;
 
+export type ReviewStatus = 'pending_openai' | 'pending_audit' | 'approved' | 'rejected' | 'unknown';
+export type ManagementSnapshot = {
+  snapshotId: string;
+  revision: number;
+  content: string | null;
+  filePath: string | null;
+  mimeType: string | null;
+  sizeBytes: number | null;
+  reviewStatus: ReviewStatus;
+  createdAt: string;
+};
+export type ModerationAction =
+  | { action: 'approve' | 'reject' | 'send_to_manual'; snapshotId: string; expectedReviewStatus: 'pending_openai' | 'pending_audit'; note?: string }
+  | { action: 'disable' | 'clear_flags'; snapshotId: string };
+export type ActionName = ModerationAction['action'];
+
 export type PendingSubmission = {
+  frontier: ManagementSnapshot;
+  publicSnapshotId: string | null;
+  publicSnapshot: ManagementSnapshot | null;
+  reportSnapshotId: string;
+  reviewStatus: ReviewStatus;
+  authorDeletedAt: string | null;
+  adminDeletedAt: string | null;
+  adminDeletedBy: string | null;
+  latestReviewAudit: { id: string; snapshotId: string; fromStatus: ReviewStatus; toStatus: ReviewStatus; source: string; adminUserId: string | null; note: string | null; createdAt: string } | null;
   id: string;
   kind: 'image' | 'comment';
   markerId: string;
@@ -28,7 +52,6 @@ export type PendingSubmission = {
   filePath: string | null;
   status: ModerationStatus;
   flagCount?: number;
-  moderationNote: string | null;
   mimeType: string | null;
   sizeBytes: number | null;
   parentId: string | null;
@@ -76,6 +99,7 @@ export type ReviewSubmissionStats = {
   byKind?: { kind: PendingSubmission['kind']; count: number }[];
   byType: { type: string; count: number }[];
   byStatus: { status: ModerationStatus; count: number }[];
+  byReviewStatus: { reviewStatus: ReviewStatus; count: number }[];
 };
 
 export type ImageCoverageMetric = {
@@ -198,6 +222,8 @@ export type OrphanImageReport = {
 };
 
 export type ListPendingSubmissionsOptions = {
+  mode?: 'all' | 'reports';
+  offset?: number;
   submissionId?: string;
   statuses?: ModerationStatus[];
   from?: string;
@@ -289,8 +315,12 @@ export async function listPendingSubmissions(options: ListPendingSubmissionsOpti
   items: PendingSubmission[];
   stats: ReviewSubmissionStats | null;
   limit: number;
+  offset: number;
+  nextOffset: number | null;
 }> {
   const params = new URLSearchParams();
+  if (options.mode) params.set('mode', options.mode);
+  if (options.offset !== undefined) params.set('offset', String(options.offset));
   if (options.submissionId) {
     params.set('submissionId', options.submissionId);
   }
@@ -316,8 +346,12 @@ export async function listPendingSubmissions(options: ListPendingSubmissionsOpti
     })[];
     stats?: ReviewSubmissionStats;
     limit?: number;
+    offset: number;
+    nextOffset: number | null;
   };
   return {
+    offset: payload.offset,
+    nextOffset: payload.nextOffset,
     items: (payload.items ?? []).map((item) => ({
       ...item,
       ...(item.flagCount !== undefined || item.flag_count !== undefined || item.flagsCount !== undefined
@@ -447,23 +481,18 @@ export async function listDuplicateMarkerImages(markerId: string, options: {
   };
 }
 
-export async function updateSubmissionStatus(
+export async function performModerationAction(
   id: string,
-  status: ModerationStatus,
-  moderationNote?: string,
-): Promise<void> {
+  command: ModerationAction,
+): Promise<{ ok: true; actorUserId: string; outcome: 'committed' | 'no_op' }> {
   const response = await fetch(`${DATA_API_BASE}/moderation/v1/${encodeURIComponent(id)}/status`, {
     method: 'PATCH',
     credentials: 'include',
-    headers: {
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({
-      status,
-      moderationNote,
-    }),
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(command),
   });
   if (!response.ok) throw await toApiError(response);
+  return await response.json();
 }
 
 export async function archiveTestImages(): Promise<{
