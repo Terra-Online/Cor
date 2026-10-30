@@ -12,6 +12,7 @@ import {
   type SubmissionImage,
   archiveTestImages,
   fetchImageBlobUrl,
+  fetchPublicImageBlobUrl,
   getImageCoverage,
   getOrphanImages,
   getSession,
@@ -1326,7 +1327,7 @@ function PublicSnapshotImage({ filePath }: { filePath: string }) {
     let disposed = false;
     let objectUrl: string | null = null;
     setUrl(null); setError(null);
-    void fetchImageBlobUrl(filePath).then(value => {
+    void fetchPublicImageBlobUrl(filePath).then(value => {
       objectUrl = value;
       if (disposed) URL.revokeObjectURL(value); else setUrl(value);
     }).catch(err => { if (!disposed) setError(err instanceof Error ? err.message : 'Image unavailable'); });

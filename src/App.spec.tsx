@@ -82,6 +82,7 @@ beforeEach(() => {
     'fetch',
     vi.fn(async (input: string, init?: RequestInit) => {
       const url = new URL(input, 'http://localhost');
+      if (url.pathname === '/api/uploads/v1/file/images/A.webp') return Response.json({ message: 'Image file was not found.' }, { status: 404 });
       if (url.pathname.endsWith('/session')) return Response.json({ user: { uid: 'admin', role: 'a' } });
       if (init?.method === 'PATCH') {
         const body = JSON.parse(String(init.body));
@@ -256,7 +257,7 @@ it('captures disable on B separately from review and shows both image versions',
   ];
   await mount();
   expect(host.querySelectorAll('.inspector img')).toHaveLength(2);
-  expect(reads.map((url) => url.pathname)).toContain('/api/uploads/v1/file/images/A.webp');
+  expect(reads.map((url) => url.pathname)).toContain('/api/uploads/v1/public-file/images/A.webp');
   expect(reads.map((url) => url.pathname)).toContain('/api/uploads/v1/file/images/B.webp');
   await click('Disable submission');
   expect(requests[0].body).toEqual({ action: 'disable', snapshotId: 'B' });

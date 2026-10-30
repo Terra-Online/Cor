@@ -462,6 +462,14 @@ export async function runModerationSelected(ids: string[]): Promise<number> {
   return payload.processed;
 }
 
+export async function fetchPublicImageBlobUrl(filePath: string): Promise<string> {
+  const response = await fetch(getPublicImageUrl(filePath), {
+    credentials: 'omit',
+  });
+  if (!response.ok) throw await toApiError(response);
+  return URL.createObjectURL(await response.blob());
+}
+
 export async function fetchImageBlobUrl(filePath: string): Promise<string> {
   const response = await fetch(`${DATA_API_BASE}/uploads/v1/file/${encodeObjectPath(filePath)}`, {
     credentials: 'include',
