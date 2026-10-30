@@ -132,7 +132,7 @@ export default function AtlosReportPage() {
           report,
           submissions.filter(item => item.publicSnapshot !== null),
           ugcLikes,
-          submissions.filter(item => item.reviewStatus === 'rejected'),
+          submissions.filter(item => item.frontier.reviewStatus === 'rejected'),
         ),
       });
     } catch (error) {

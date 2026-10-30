@@ -1,11 +1,15 @@
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { expect, it, vi } from 'vitest';
+
+import type { ManagementSnapshot, PendingSubmission } from './api';
 import AtlosReportPage from './AtlosReportPage';
 import { ReportLocaleProvider } from './reportLocale';
 
 it('counts real rejections separately from hidden approved and unknown records, and includes public A with pending B', async () => {
-  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  (
+    globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
+  ).IS_REACT_ACT_ENVIRONMENT = true;
   window.history.replaceState(null, '', '/atlos-report?lang=en');
   vi.stubGlobal('matchMedia', () => ({ matches: true }));
   vi.stubGlobal(
@@ -15,31 +19,49 @@ it('counts real rejections separately from hidden approved and unknown records, 
       disconnect() {}
     },
   );
-  const common = {
-    kind: 'image',
+  const snapshot: ManagementSnapshot = {
+    snapshotId: 'B',
+    revision: 2,
+    content: null,
+    filePath: 'images/B.webp',
+    mimeType: 'image/webp',
+    sizeBytes: 100,
+    reviewStatus: 'approved',
     createdAt: new Date().toISOString(),
+  };
+  const common: Omit<PendingSubmission, 'id'> = {
+    kind: 'image',
+    markerId: 'marker',
+    poiHash: 'hash',
     poiType: 'gather',
     userId: 'u',
+    createdAt: snapshot.createdAt,
+    updatedAt: snapshot.createdAt,
     submitter: null,
+    parentId: null,
+    commentDepth: 0,
+    authorDeletedAt: null,
+    adminDeletedAt: null,
+    adminDeletedBy: null,
+    latestReviewAudit: null,
+    flagCount: 0,
+    reportSnapshotId: 'B',
+    frontier: snapshot,
+    publicSnapshot: null,
+    status: 'stale',
   };
-  const publicEdit = {
+  const publicEdit: PendingSubmission = {
     ...common,
     id: 'edit',
     status: 'pending_audit',
-    reviewStatus: 'pending_audit',
-    publicSnapshot: { snapshotId: 'A', reviewStatus: 'approved' },
+    reportSnapshotId: 'A',
+    frontier: { ...snapshot, reviewStatus: 'pending_audit' },
+    publicSnapshot: { ...snapshot, snapshotId: 'A', revision: 1, filePath: 'images/A.webp' },
   };
-  const hidden = [
-    { ...common, id: 'rejected', status: 'stale', reviewStatus: 'rejected', publicSnapshot: null },
-    {
-      ...common,
-      id: 'disabled',
-      status: 'stale',
-      reviewStatus: 'approved',
-      adminDeletedAt: '2026-10-01',
-      publicSnapshot: null,
-    },
-    { ...common, id: 'unknown', status: 'stale', reviewStatus: 'unknown', publicSnapshot: null },
+  const hidden: PendingSubmission[] = [
+    { ...common, id: 'rejected', frontier: { ...snapshot, reviewStatus: 'rejected' } },
+    { ...common, id: 'disabled', adminDeletedAt: '2026-10-01' },
+    { ...common, id: 'unknown', frontier: { ...snapshot, reviewStatus: 'unknown' } },
   ];
   const reads: URL[] = [];
   vi.stubGlobal(
@@ -49,7 +71,13 @@ it('counts real rejections separately from hidden approved and unknown records, 
       if (url.pathname.endsWith('/coverage'))
         return Response.json({
           generatedAt: new Date().toISOString(),
-          total: { totalPoints: 0, coveredPoints: 0, missingPoints: 0, imageCount: 0, coverageRate: 0 },
+          total: {
+            totalPoints: 0,
+            coveredPoints: 0,
+            missingPoints: 0,
+            imageCount: 0,
+            coverageRate: 0,
+          },
           regions: [],
         });
       if (url.pathname.endsWith('/ugc-likes'))
@@ -73,6 +101,7 @@ it('counts real rejections separately from hidden approved and unknown records, 
         nextOffset: !status && !url.searchParams.has('offset') ? 100 : null,
         offset: Number(url.searchParams.get('offset') || 0),
         limit: 100,
+        stats: { total: 4, byKind: [], byType: [], byStatus: [], byReviewStatus: [] },
       });
     }),
   );

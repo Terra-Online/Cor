@@ -33,10 +33,8 @@ export type ActionName = ModerationAction['action'];
 
 export type PendingSubmission = {
   frontier: ManagementSnapshot;
-  publicSnapshotId: string | null;
   publicSnapshot: ManagementSnapshot | null;
   reportSnapshotId: string;
-  reviewStatus: ReviewStatus;
   authorDeletedAt: string | null;
   adminDeletedAt: string | null;
   adminDeletedBy: string | null;
@@ -46,14 +44,9 @@ export type PendingSubmission = {
   markerId: string;
   poiHash: string;
   poiType: string;
-  snapshotId: string;
   userId: string;
-  content: string | null;
-  filePath: string | null;
   status: ModerationStatus;
-  flagCount?: number;
-  mimeType: string | null;
-  sizeBytes: number | null;
+  flagCount: number;
   parentId: string | null;
   commentDepth: number;
   submitter: {
@@ -96,7 +89,7 @@ export type DuplicateImageMarker = {
 
 export type ReviewSubmissionStats = {
   total: number;
-  byKind?: { kind: PendingSubmission['kind']; count: number }[];
+  byKind: { kind: PendingSubmission['kind']; count: number }[];
   byType: { type: string; count: number }[];
   byStatus: { status: ModerationStatus; count: number }[];
   byReviewStatus: { reviewStatus: ReviewStatus; count: number }[];
@@ -240,24 +233,6 @@ type ApiErrorPayload = {
   };
 };
 
-type SubmissionImagePayload = Omit<SubmissionImage, 'flagCount'> & {
-  flagCount?: number | string | null;
-  flag_count?: number | string | null;
-  flagsCount?: number | string | null;
-};
-
-function normalizeFlagCount(value: unknown): number {
-  const count = Number(value ?? 0);
-  return Number.isFinite(count) && count >= 0 ? Math.floor(count) : 0;
-}
-
-function normalizeSubmissionImage(image: SubmissionImagePayload): SubmissionImage {
-  return {
-    ...image,
-    flagCount: normalizeFlagCount(image.flagCount ?? image.flag_count ?? image.flagsCount),
-  };
-}
-
 export class ApiClientError extends Error {
   readonly status: number;
   readonly code: string;
@@ -313,7 +288,7 @@ export async function startGoogleSignIn(callbackURL: string): Promise<string> {
 
 export async function listPendingSubmissions(options: ListPendingSubmissionsOptions = {}): Promise<{
   items: PendingSubmission[];
-  stats: ReviewSubmissionStats | null;
+  stats: ReviewSubmissionStats;
   limit: number;
   offset: number;
   nextOffset: number | null;
@@ -338,29 +313,7 @@ export async function listPendingSubmissions(options: ListPendingSubmissionsOpti
     credentials: 'include',
   });
   if (!response.ok) throw await toApiError(response);
-  const payload = await response.json() as {
-    items?: (PendingSubmission & {
-      flagCount?: number | string | null;
-      flag_count?: number | string | null;
-      flagsCount?: number | string | null;
-    })[];
-    stats?: ReviewSubmissionStats;
-    limit?: number;
-    offset: number;
-    nextOffset: number | null;
-  };
-  return {
-    offset: payload.offset,
-    nextOffset: payload.nextOffset,
-    items: (payload.items ?? []).map((item) => ({
-      ...item,
-      ...(item.flagCount !== undefined || item.flag_count !== undefined || item.flagsCount !== undefined
-        ? { flagCount: normalizeFlagCount(item.flagCount ?? item.flag_count ?? item.flagsCount) }
-        : {}),
-    })),
-    stats: payload.stats ?? null,
-    limit: payload.limit ?? options.limit ?? MODERATION_DATE_FETCH_LIMIT,
-  };
+  return await response.json();
 }
 
 export async function listDuplicateImageMarkers(options: {
@@ -382,23 +335,7 @@ export async function listDuplicateImageMarkers(options: {
     credentials: 'include',
   });
   if (!response.ok) throw await toApiError(response);
-  const payload = await response.json() as {
-    items?: (Omit<DuplicateImageMarker, 'latestImage'> & {
-      latestImage?: SubmissionImagePayload | null;
-    })[];
-    total?: number;
-    limit?: number;
-    offset?: number;
-  };
-  return {
-    items: (payload.items ?? []).map((item) => ({
-      ...item,
-      latestImage: item.latestImage ? normalizeSubmissionImage(item.latestImage) : null,
-    })),
-    total: payload.total ?? 0,
-    limit: payload.limit ?? limit,
-    offset: payload.offset ?? offset,
-  };
+  return await response.json();
 }
 
 export async function getImageCoverage(): Promise<ImageCoverageReport> {
@@ -465,20 +402,7 @@ export async function listDuplicateMarkerImages(markerId: string, options: {
     credentials: 'include',
   });
   if (!response.ok) throw await toApiError(response);
-  const payload = await response.json() as {
-    markerId?: string;
-    items?: SubmissionImagePayload[];
-    total?: number;
-    limit?: number;
-    offset?: number;
-  };
-  return {
-    markerId: payload.markerId ?? markerId,
-    items: (payload.items ?? []).map(normalizeSubmissionImage),
-    total: payload.total ?? 0,
-    limit: payload.limit ?? limit,
-    offset: payload.offset ?? offset,
-  };
+  return await response.json();
 }
 
 export async function performModerationAction(
@@ -520,8 +444,8 @@ export async function runModerationOnce(): Promise<number> {
     credentials: 'include',
   });
   if (!response.ok) throw await toApiError(response);
-  const payload = await response.json() as { processed?: number };
-  return payload.processed ?? 0;
+  const payload = await response.json() as { processed: number };
+  return payload.processed;
 }
 
 export async function runModerationSelected(ids: string[]): Promise<number> {
@@ -534,8 +458,8 @@ export async function runModerationSelected(ids: string[]): Promise<number> {
     body: JSON.stringify({ ids }),
   });
   if (!response.ok) throw await toApiError(response);
-  const payload = await response.json() as { processed?: number };
-  return payload.processed ?? 0;
+  const payload = await response.json() as { processed: number };
+  return payload.processed;
 }
 
 export async function fetchImageBlobUrl(filePath: string): Promise<string> {

@@ -20,10 +20,6 @@ function row(id = 'comment'): PendingSubmission {
     poiHash: 'hash',
     poiType: 'poi',
     userId: 'author',
-    snapshotId: 'B',
-    reviewStatus: 'pending_openai',
-    content: 'Frontier text',
-    filePath: null,
     frontier: {
       snapshotId: 'B',
       revision: 2,
@@ -34,7 +30,6 @@ function row(id = 'comment'): PendingSubmission {
       reviewStatus: 'pending_openai',
       createdAt: '2026-10-28',
     },
-    publicSnapshotId: 'A',
     publicSnapshot: {
       snapshotId: 'A',
       revision: 1,
@@ -52,8 +47,6 @@ function row(id = 'comment'): PendingSubmission {
     adminDeletedAt: null,
     adminDeletedBy: null,
     latestReviewAudit: null,
-    mimeType: null,
-    sizeBytes: null,
     parentId: null,
     commentDepth: 0,
     submitter: null,
@@ -98,7 +91,7 @@ beforeEach(() => {
       reads.push(url);
       return Response.json({
         items: rows,
-        stats: null,
+        stats: { total: rows.length, byKind: [], byType: [], byStatus: [], byReviewStatus: [] },
         limit: 100,
         offset: Number(url.searchParams.get('offset') || 0),
         nextOffset,
@@ -129,9 +122,7 @@ it('settles a partial bulk failure before refreshing once and never replays succ
     row('one'),
     {
       ...row('two'),
-      snapshotId: 'C',
       frontier: { ...row().frontier, snapshotId: 'C', reviewStatus: 'pending_audit' },
-      reviewStatus: 'pending_audit',
     },
   ];
   let finish: (response: Response) => void = () => {};
@@ -150,7 +141,7 @@ it('settles a partial bulk failure before refreshing once and never replays succ
     { action: 'approve', snapshotId: 'B', expectedReviewStatus: 'pending_openai' },
     { action: 'approve', snapshotId: 'C', expectedReviewStatus: 'pending_audit' },
   ]);
-  rows = [{ ...row('one'), snapshotId: 'D', frontier: { ...row().frontier, snapshotId: 'D' } }];
+  rows = [{ ...row('one'), frontier: { ...row().frontier, snapshotId: 'D' } }];
   await act(async () => {
     finish(Response.json({ ok: true, outcome: 'committed', actorUserId: 'admin' }));
   });
@@ -167,7 +158,7 @@ it('exposes 422 without legacy fallback and refreshes a stale single review befo
   await mount();
   respondToPatch = async () => {
     rows = [
-      { ...row(), reviewStatus: 'pending_audit', frontier: { ...row().frontier, reviewStatus: 'pending_audit' } },
+      { ...row(), frontier: { ...row().frontier, reviewStatus: 'pending_audit' } },
     ];
     return Response.json({ code: 'MODERATION_CONFLICT' }, { status: 409 });
   };
@@ -193,9 +184,7 @@ it('browses hidden comment and image reports without queue dates, pages, and res
   const hidden = {
     ...row(),
     status: 'stale' as const,
-    reviewStatus: 'rejected' as const,
     frontier: { ...row().frontier, reviewStatus: 'rejected' as const },
-    publicSnapshotId: null,
     publicSnapshot: null,
     reportSnapshotId: 'B',
     authorDeletedAt: '2026-10-01',
@@ -229,9 +218,7 @@ it('loads a retained deep link independently of dates and keeps rejected and dis
     {
       ...row('old'),
       status: 'stale',
-      reviewStatus: 'approved',
       frontier: { ...row().frontier, reviewStatus: 'approved' },
-      publicSnapshotId: null,
       publicSnapshot: null,
       adminDeletedAt: '2020-01-01',
       adminDeletedBy: 'reviewer',
@@ -263,7 +250,6 @@ it('captures disable on B separately from review and shows both image versions',
     {
       ...row('image'),
       kind: 'image',
-      filePath: 'images/B.webp',
       frontier: { ...row().frontier, filePath: 'images/B.webp' },
       publicSnapshot: { ...row().publicSnapshot!, filePath: 'images/A.webp' },
     },
@@ -286,7 +272,7 @@ it('does not substitute the frontier when the server omits its report target', a
 });
 
 it('keeps a pending click bound to its original row while the inspector selection changes', async () => {
-  rows = [row('one'), { ...row('two'), snapshotId: 'C', frontier: { ...row().frontier, snapshotId: 'C' } }];
+  rows = [row('one'), { ...row('two'), frontier: { ...row().frontier, snapshotId: 'C' } }];
   let finish: (response: Response) => void = () => {};
   respondToPatch = async () =>
     new Promise((resolve) => {

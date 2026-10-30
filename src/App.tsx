@@ -357,12 +357,12 @@ export default function App() {
   useEffect(() => {
     setImagePreview(null);
     setImageError(null);
-    if (!selected || selected.kind !== 'image' || !selected.filePath) return undefined;
+    if (!selected || selected.kind !== 'image' || !selected.frontier.filePath) return undefined;
 
     let disposed = false;
     let objectUrl: string | null = null;
 
-    void fetchImageBlobUrl(selected.filePath)
+    void fetchImageBlobUrl(selected.frontier.filePath)
       .then((url) => {
         objectUrl = url;
         if (disposed) {
@@ -773,8 +773,8 @@ export default function App() {
                           <span className="queue-line">{item.poiHash}</span>
                           <span className="queue-line">{formatQueueDetail(item)}</span>
                           <span className="queue-flag-count">Flags {formatFlagCount(item.flagCount)}</span>
-                          {item.kind === 'comment' && item.content && (
-                            <span className="queue-content">{item.content}</span>
+                          {item.kind === 'comment' && item.frontier.content && (
+                            <span className="queue-content">{item.frontier.content}</span>
                           )}
                           <span className="queue-time">{formatAuditSummary(item)}</span>
                           {item.latestReviewAudit?.note && <small className="queue-note">{item.latestReviewAudit?.note}</small>}
@@ -811,8 +811,8 @@ export default function App() {
                           <span className="queue-line">{item.poiHash}</span>
                           <span className="queue-line">{formatQueueDetail(item)}</span>
                           <span className="queue-flag-count">Flags {formatFlagCount(item.flagCount)}</span>
-                          {item.kind === 'comment' && item.content && (
-                            <span className="queue-content">{item.content}</span>
+                          {item.kind === 'comment' && item.frontier.content && (
+                            <span className="queue-content">{item.frontier.content}</span>
                           )}
                           <span className="queue-time">{formatAuditSummary(item)}</span>
                           {item.latestReviewAudit?.note && <small className="queue-note">{item.latestReviewAudit?.note}</small>}
@@ -849,8 +849,8 @@ export default function App() {
                           <span className="queue-line">{item.poiHash}</span>
                           <span className="queue-line">{formatQueueDetail(item)}</span>
                           <span className="queue-flag-count">Flags {formatFlagCount(item.flagCount)}</span>
-                          {item.kind === 'comment' && item.content && (
-                            <span className="queue-content">{item.content}</span>
+                          {item.kind === 'comment' && item.frontier.content && (
+                            <span className="queue-content">{item.frontier.content}</span>
                           )}
                           <span className="queue-time">{formatAuditSummary(item)}</span>
                           {item.latestReviewAudit?.note && <small className="queue-note">{item.latestReviewAudit?.note}</small>}
@@ -871,7 +871,7 @@ export default function App() {
                   {imagePreview?.id === selected.id ? (
 	                    <img
 	                      src={imagePreview.url}
-	                      alt={selected.content || selected.poiType}
+	                      alt={selected.frontier.content || selected.poiType}
 	                    />
                   ) : (
                     <div className="image-placeholder">{imageError ?? 'Loading image...'}</div>
@@ -880,7 +880,7 @@ export default function App() {
               ) : (
                 <div className="text-frame">
                   <span>Comment</span>
-                  <p>{selected.content || 'No text content returned.'}</p>
+                  <p>{selected.frontier.content || 'No text content returned.'}</p>
                 </div>
               )}
               <div className="text-frame">
@@ -904,8 +904,8 @@ export default function App() {
                 <div><span>Status</span><strong>{statusLabel(selected.status)}</strong></div>
                 {selected.kind === 'image' && (
                   <>
-                    <div><span>MIME</span><strong>{selected.mimeType || '-'}</strong></div>
-                    <div><span>Size</span><strong>{formatBytes(selected.sizeBytes)}</strong></div>
+                    <div><span>MIME</span><strong>{selected.frontier.mimeType || '-'}</strong></div>
+                    <div><span>Size</span><strong>{formatBytes(selected.frontier.sizeBytes)}</strong></div>
                   </>
                 )}
                 <div><span>Type</span><strong>{selected.poiType}</strong></div>
@@ -923,7 +923,7 @@ export default function App() {
                 <a href={submissionShareUrl(selected)} target="_blank" rel="noreferrer">Open {selected.kind} in frontend</a>
                 {selected.submitter?.nickname && <span>{selected.submitter.nickname}</span>}
               </div>
-              {selected.content && <p className="content">{selected.content}</p>}
+              {selected.frontier.content && <p className="content">{selected.frontier.content}</p>}
               {selected.latestReviewAudit?.note && <p className="note">{selected.latestReviewAudit?.note}</p>}
               <textarea
                 value={note}
@@ -1272,8 +1272,8 @@ function formatKindStatus(item: PendingSubmission): string {
 
 function formatQueueDetail(item: PendingSubmission): string {
   const detail = item.kind === 'image'
-    ? formatBytes(item.sizeBytes)
-    : `${Math.max(0, item.content?.length ?? 0)} chars`;
+    ? formatBytes(item.frontier.sizeBytes)
+    : `${Math.max(0, item.frontier.content?.length ?? 0)} chars`;
   return `${formatUserSummary(item)} · ${detail}`;
 }
 
