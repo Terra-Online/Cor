@@ -40,7 +40,6 @@ function row(id = 'comment'): PendingSubmission {
       reviewStatus: 'approved',
       createdAt: '2026-10-27',
     },
-    reportSnapshotId: 'A',
     status: 'pending_openai',
     flagCount: 2,
     authorDeletedAt: null,
@@ -113,7 +112,7 @@ it('clears reports on public A while review captures the displayed frontier B an
   await mount();
   expect(host.textContent).toContain('Public text');
   await click('Clear flags');
-  expect(requests[0].body).toEqual({ action: 'clear_flags', snapshotId: 'A' });
+  expect(requests[0].body).toEqual({ action: 'clear_flags' });
   await click('Approve');
   expect(requests[1].body).toEqual({ action: 'approve', snapshotId: 'B', expectedReviewStatus: 'pending_openai' });
 });
@@ -187,7 +186,6 @@ it('browses hidden comment and image reports without queue dates, pages, and res
     status: 'stale' as const,
     frontier: { ...row().frontier, reviewStatus: 'rejected' as const },
     publicSnapshot: null,
-    reportSnapshotId: 'B',
     authorDeletedAt: '2026-10-01',
   };
   rows = [hidden];
@@ -208,7 +206,7 @@ it('browses hidden comment and image reports without queue dates, pages, and res
   expect(reads.at(-1)!.searchParams.get('offset')).toBe('100');
   await click('Clear flags');
   expect(requests[0].url.pathname).toContain('/hidden-image/');
-  expect(requests[0].body).toEqual({ action: 'clear_flags', snapshotId: 'B' });
+  expect(requests[0].body).toEqual({ action: 'clear_flags' });
   expect(reads.at(-1)!.searchParams.get('offset')).toBe('0');
   expect(host.textContent).toContain('Offset 0.');
 });
@@ -263,14 +261,6 @@ it('captures disable on B separately from review and shows both image versions',
   expect(requests[0].body).toEqual({ action: 'disable', snapshotId: 'B' });
 });
 
-it('does not substitute the frontier when the server omits its report target', async () => {
-  rows[0].reportSnapshotId = undefined as unknown as string;
-  respondToPatch = async () => Response.json({ code: 'VALIDATION_ERROR' }, { status: 422 });
-  await mount();
-  await click('Clear flags');
-  expect(requests[0].body).toEqual({ action: 'clear_flags' });
-  expect(host.textContent).toContain('Contract mismatch (422)');
-});
 
 it('keeps a pending click bound to its original row while the inspector selection changes', async () => {
   rows = [row('one'), { ...row('two'), frontier: { ...row().frontier, snapshotId: 'C' } }];

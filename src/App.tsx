@@ -52,7 +52,7 @@ function availableActions(item: PendingSubmission): ActionName[] {
 }
 function captureAction(item: PendingSubmission, action: ActionName, note: string): ModerationAction {
   if (action === 'disable') return { action, snapshotId: item.frontier.snapshotId };
-  if (action === 'clear_flags') return { action, snapshotId: item.reportSnapshotId };
+  if (action === 'clear_flags') return { action };
   const phase = item.frontier.reviewStatus;
   if (phase !== 'pending_openai' && phase !== 'pending_audit') throw new Error('Refresh before reviewing this terminal version.');
   return { action, snapshotId: item.frontier.snapshotId, expectedReviewStatus: phase, ...(note.trim() ? { note: note.trim() } : {}) };
@@ -900,7 +900,6 @@ export default function App() {
                 <div><span>Author deleted</span><strong>{selected.authorDeletedAt || 'No'}</strong></div>
                 <div><span>Admin disabled</span><strong>{selected.adminDeletedAt || 'No'} {selected.adminDeletedBy}</strong></div>
                 <div><span>Flags</span><strong>{formatFlagCount(selected.flagCount)}</strong></div>
-                <div><span>Report target</span><strong>{selected.reportSnapshotId}</strong></div>
                 <div><span>POI</span><strong>{selected.markerId}</strong></div>
                 <div><span>Status</span><strong>{statusLabel(selected.status)}</strong></div>
                 {selected.kind === 'image' && (
