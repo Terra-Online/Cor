@@ -28,11 +28,12 @@ export type ManagementSnapshot = {
 };
 export type ModerationAction =
   | { action: 'approve' | 'reject' | 'send_to_manual'; snapshotId: string; expectedReviewStatus: 'pending_openai' | 'pending_audit'; note?: string }
-  | { action: 'disable'; snapshotId: string }
+  | { action: 'disable'; snapshotId: string; expectedLifecycleVersion: number }
   | { action: 'clear_flags' };
 export type ActionName = ModerationAction['action'];
 
 export type PendingSubmission = {
+  lifecycleVersion?: number;
   frontier: ManagementSnapshot;
   publicSnapshot: ManagementSnapshot | null;
   authorDeletedAt: string | null;
