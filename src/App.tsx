@@ -12,6 +12,7 @@ import {
   type SubmissionImage,
   archiveTestImages,
   fetchImageBlobUrl,
+  fetchPublicImageBlobUrl,
   getImageCoverage,
   getOrphanImages,
   getSession,
@@ -20,7 +21,10 @@ import {
   listPendingSubmissions,
   runModerationSelected,
   startGoogleSignIn,
-  updateSubmissionStatus,
+  performModerationAction,
+  ApiClientError,
+  type ActionName,
+  type ModerationAction,
 } from './api';
 import ImageCoverageView, { type CoverageRegionFilter } from './ImageCoverageView';
 import OrphanImagesView from './OrphanImagesView';
@@ -31,24 +35,35 @@ type AccessState =
   | { status: 'denied'; message: string }
   | { status: 'ready'; user: AdminUser };
 
-type BusyAction = {
-  id: string;
-  status: ModerationStatus;
-} | {
-  id: '__ai__';
-  status: 'pending_openai';
-} | null;
+type BusyAction = { id: string; action: ActionName | 'ai' } | null;
 
-const STATUS_TRANSITIONS: Record<ModerationStatus, ModerationStatus[]> = {
-  pending_openai: ['pending_audit', 'stale'],
-  pending_audit: ['active', 'stale'],
-  active: ['stale'],
-  flagged: ['active', 'stale'],
-  remove_request: ['active', 'stale'],
-  stale: ['active'],
-};
+// Presentation eligibility only. Bayes validates every transition and concurrency guard.
+function availableActions(item: PendingSubmission): ActionName[] {
+  const actions: ActionName[] = [];
+  if (!item.authorDeletedAt && !item.adminDeletedAt) {
+    if (item.frontier.reviewStatus === 'pending_openai' || item.frontier.reviewStatus === 'pending_audit') {
+      actions.push('approve', 'reject');
+      if (item.frontier.reviewStatus === 'pending_openai') actions.push('send_to_manual');
+    }
+    actions.push('disable');
+  }
+  if ((item.flagCount ?? 0) > 0) actions.push('clear_flags');
+  return actions;
+}
+function captureAction(item: PendingSubmission, action: ActionName, note: string): ModerationAction {
+  if (action === 'disable') return { action, snapshotId: item.frontier.snapshotId };
+  if (action === 'clear_flags') return { action };
+  const phase = item.frontier.reviewStatus;
+  if (phase !== 'pending_openai' && phase !== 'pending_audit') throw new Error('Refresh before reviewing this terminal version.');
+  return { action, snapshotId: item.frontier.snapshotId, expectedReviewStatus: phase, ...(note.trim() ? { note: note.trim() } : {}) };
+}
+function actionError(error: unknown): string {
+  if (error instanceof ApiClientError && error.status === 409) return 'Conflict: content or review phase changed. Inspect the refreshed row and click again.';
+  if (error instanceof ApiClientError && error.status === 422) return 'Contract mismatch (422): the client command was rejected. Update the client/backend contract before trying again.';
+  return `${error instanceof Error ? error.message : 'Action failed'}. Inspect the refreshed outcome before another action.`;
+}
 
-const MANUAL_QUEUE_STATUSES = new Set<ModerationStatus>(['pending_audit', 'flagged', 'remove_request']);
+const MANUAL_QUEUE_STATUSES = new Set<ModerationStatus>(['pending_audit', 'flagged']);
 const REVIEWED_STATUSES = new Set<ModerationStatus>(['active', 'stale']);
 
 type DateRangePreset = 'today' | '7d' | '30d' | 'custom';
@@ -63,6 +78,9 @@ const DATE_RANGE_PRESETS: { value: DateRangePreset; label: string }[] = [
 
 export default function App() {
   const [access, setAccess] = useState<AccessState>({ status: 'loading' });
+  const [reportMode, setReportMode] = useState(false);
+  const [reportOffset, setReportOffset] = useState(0);
+  const [reportNextOffset, setReportNextOffset] = useState<number | null>(null);
   const [items, setItems] = useState<PendingSubmission[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyAction, setBusyAction] = useState<BusyAction>(null);
@@ -99,10 +117,10 @@ export default function App() {
 
   const visibleItems = useMemo(
     () => items.filter((item) => (
-      (statusFilter === 'all' || item.status === statusFilter)
-      && (!commentsOnly || item.kind === 'comment')
+      (submissionId || reportMode || statusFilter === 'all' || item.status === statusFilter)
+      && (submissionId || !commentsOnly || item.kind === 'comment')
     )),
-    [commentsOnly, items, statusFilter],
+    [commentsOnly, items, statusFilter, reportMode, submissionId],
   );
   const selected = useMemo(
     () => visibleItems.find((item) => item.id === selectedId) ?? visibleItems[0] ?? null,
@@ -140,11 +158,13 @@ export default function App() {
     [duplicateMarkers, selectedDuplicateMarkerId],
   );
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (resetReports = false, offset = 0) => {
     setLoading(true);
     setError(null);
     try {
-      const result = await listPendingSubmissions(submissionId ? { submissionId, limit: 1 } : {
+      const result = await listPendingSubmissions(submissionId ? { submissionId, limit: 1 } : reportMode ? {
+        mode: 'reports', limit: 100, offset: resetReports ? 0 : offset,
+      } : {
         from: queryDateRange.startDate.toISOString(),
         to: queryDateRange.endDate.toISOString(),
         limit: MODERATION_DATE_FETCH_LIMIT,
@@ -152,6 +172,8 @@ export default function App() {
       // Also verify the ID locally while Bayes and Cor may be deployed separately.
       const pending = submissionId ? result.items.filter((item) => item.id === submissionId) : result.items;
       setItems(pending);
+      setReportNextOffset(result.nextOffset);
+      setReportOffset(result.offset);
       setServerStats(submissionId ? null : result.stats);
       setResultLimit(result.limit);
       setSelectedIds((current) => current.filter((id) => pending.some((item) => item.id === id)));
@@ -160,14 +182,18 @@ export default function App() {
         return pending[0]?.id ?? null;
       });
       if (submissionId && pending.length === 0) {
-        setError(`Submission ${submissionId} was not found. It may have been deleted.`);
+        setError(`Submission ${submissionId} was not found.`);
       }
+      return true;
     } catch (err) {
+      setItems([]);
+      setServerStats(null);
       setError(err instanceof Error ? err.message : 'Failed to load moderation queue.');
+      return false;
     } finally {
       setLoading(false);
     }
-  }, [queryDateRange, submissionId]);
+  }, [queryDateRange, submissionId, reportMode]);
 
   const returnToQueue = () => {
     const url = new URL(window.location.href);
@@ -332,12 +358,12 @@ export default function App() {
   useEffect(() => {
     setImagePreview(null);
     setImageError(null);
-    if (!selected || selected.kind !== 'image' || !selected.filePath) return undefined;
+    if (!selected || selected.kind !== 'image' || !selected.frontier.filePath) return undefined;
 
     let disposed = false;
     let objectUrl: string | null = null;
 
-    void fetchImageBlobUrl(selected.filePath)
+    void fetchImageBlobUrl(selected.frontier.filePath)
       .then((url) => {
         objectUrl = url;
         if (disposed) {
@@ -360,39 +386,46 @@ export default function App() {
     };
   }, [selected]);
 
-  const decide = useCallback(async (id: string, status: ModerationStatus) => {
-    setBusyAction({ id, status });
+  const decide = useCallback(async (item: PendingSubmission, action: ActionName) => {
+    // Capture primitive command fields synchronously at the click, before any await.
+    const command = captureAction(item, action, note);
+    setBusyAction({ id: item.id, action });
     setError(null);
+    let message: string;
     try {
-      await updateSubmissionStatus(id, status, note.trim() || undefined);
+      const result = await performModerationAction(item.id, command);
+      message = `${actionLabel(action)}: ${result.outcome}.`;
       setNote('');
-      await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update submission.');
-    } finally {
-      setBusyAction(null);
+      message = actionError(err);
     }
+    const refreshed = await refresh(true);
+    setError(refreshed ? message : `${message} Queue refresh failed. Refresh before another action.`);
+    setBusyAction(null);
   }, [note, refresh]);
 
-  const updateMany = useCallback(async (targets: PendingSubmission[], status: ModerationStatus, label?: string) => {
-    const validTargets = targets.filter((item) => STATUS_TRANSITIONS[item.status].includes(status));
-    if (validTargets.length === 0) {
-      setError(`No items can ${label ?? `move to ${status}`}.`);
-      return;
-    }
-
-    setLoading(true);
+  const updateMany = useCallback(async (targets: PendingSubmission[], action: ActionName) => {
+    const commands = targets.filter(item => availableActions(item).includes(action))
+      .map(item => ({ id: item.id, command: captureAction(item, action, note) }));
+    if (commands.length === 0) return;
+    setBusyAction({ id: '__bulk__', action });
     setError(null);
-    try {
-      await Promise.all(validTargets.map((item) => updateSubmissionStatus(item.id, status, note.trim() || undefined)));
-      setNote('');
-      await refresh();
-      setError(`${label ?? `Moved to ${status}`}: ${validTargets.length} item(s).`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : `Failed to ${label ?? `move items to ${status}`}.`);
-    } finally {
-      setLoading(false);
-    }
+    const results = await Promise.allSettled(commands.map(({ id, command }) => performModerationAction(id, command)));
+    let committed = 0, noOp = 0, conflicts = 0, failed = 0;
+    const failures: string[] = [];
+    results.forEach((result, index) => {
+      if (result.status === 'fulfilled') {
+        if (result.value.outcome === 'no_op') noOp++; else committed++;
+      } else {
+        if (result.reason instanceof ApiClientError && result.reason.status === 409) conflicts++; else failed++;
+        failures.push(`${commands[index].id}: ${actionError(result.reason)}`);
+      }
+    });
+    setNote('');
+    setSelectedIds([]);
+    const refreshed = await refresh(true);
+    setError(`Batch settled: ${committed} committed, ${noOp} unchanged, ${conflicts} conflicts, ${failed} failed. ${failures.join(' ')}${refreshed ? '' : ' Queue refresh failed. Refresh before another action.'}`);
+    setBusyAction(null);
   }, [note, refresh]);
 
   const archiveTestImageSubmissions = useCallback(async () => {
@@ -410,14 +443,14 @@ export default function App() {
   }, [refresh]);
 
   const sendSelectedToAi = useCallback(async (targets: PendingSubmission[]) => {
-    const pendingTargets = targets.filter((item) => item.status === 'pending_openai');
+    const pendingTargets = targets.filter((item) => availableActions(item).includes('send_to_manual'));
     if (pendingTargets.length === 0) {
       setError('No pending_openai items selected.');
       return;
     }
 
     setLoading(true);
-    setBusyAction({ id: '__ai__', status: 'pending_openai' });
+    setBusyAction({ id: '__ai__', action: 'ai' });
     setError(null);
     try {
       const processed = await runModerationSelected(pendingTargets.map((item) => item.id));
@@ -438,7 +471,7 @@ export default function App() {
     }
 
     setLoading(true);
-    setBusyAction({ id: '__ai__', status: 'pending_openai' });
+    setBusyAction({ id: '__ai__', action: 'ai' });
     setError(null);
     try {
       const processed = await runModerationSelected([selected.id]);
@@ -465,9 +498,8 @@ export default function App() {
   }, []);
 
   const stateActions = renderStateActions({
-    statusFilter,
     selectedVisibleItems,
-    loading,
+    loading: loading || Boolean(busyAction),
     updateMany,
     sendSelectedToAi,
     aiBusy: busyAction?.id === '__ai__',
@@ -532,11 +564,12 @@ export default function App() {
           </button>
           <button
             type="button"
-            className={activeView === 'review' ? 'view-tab active' : 'view-tab'}
-            onClick={() => setActiveView('review')}
+            className={activeView === 'review' && !reportMode ? 'view-tab active' : 'view-tab'}
+            onClick={() => { setReportMode(false); setActiveView('review'); }}
           >
             Review
           </button>
+          <button type="button" className={activeView === 'review' && reportMode ? 'view-tab active' : 'view-tab'} onClick={() => { returnToQueue(); setReportMode(true); setCommentsOnly(false); setActiveView('review'); }}>Retained reports</button>
           <button
             type="button"
             className={activeView === 'duplicates' ? 'view-tab active' : 'view-tab'}
@@ -581,7 +614,7 @@ export default function App() {
           </div>
           <button type="button" onClick={returnToQueue} disabled={loading || Boolean(busyAction)}>Back to queue</button>
         </section>
-      ) : activeView === 'review' ? (
+      ) : activeView === 'review' && !reportMode ? (
         <>
           <section className="status-strip">
             <button
@@ -693,6 +726,11 @@ export default function App() {
           </button>
         </section>
       ) : null}
+      {activeView === 'review' && reportMode && <section className="state-actions">
+        <span>Retained reports, all dates and review states. Offset {reportOffset}.</span>
+        <button type="button" disabled={loading || Boolean(busyAction) || reportOffset === 0} onClick={() => { setReportOffset(0); void refresh(false, 0); }}>First report page</button>
+        <button type="button" disabled={loading || Boolean(busyAction) || reportNextOffset === null} onClick={() => { if (reportNextOffset !== null) { setReportOffset(reportNextOffset); void refresh(false, reportNextOffset); } }}>Next report page</button>
+      </section>}
       {activeView === 'review' && <section className="state-actions">
         <div className="state-action-buttons">{stateActions}</div>
         <strong>{selectedVisibleItems.length} selected / {visibleItems.length} visible / {submissionId ? items.length : uploadStats.total} total</strong>
@@ -735,14 +773,12 @@ export default function App() {
                           </span>
                           <span className="queue-line">{item.poiHash}</span>
                           <span className="queue-line">{formatQueueDetail(item)}</span>
-                          {item.kind === 'image' && (
-                            <span className="queue-flag-count">Flags {formatFlagCount(item.flagCount)}</span>
-                          )}
-                          {item.kind === 'comment' && item.content && (
-                            <span className="queue-content">{item.content}</span>
+                          <span className="queue-flag-count">Flags {formatFlagCount(item.flagCount)}</span>
+                          {item.kind === 'comment' && item.frontier.content && (
+                            <span className="queue-content">{item.frontier.content}</span>
                           )}
                           <span className="queue-time">{formatAuditSummary(item)}</span>
-                          {item.moderationNote && <small className="queue-note">{item.moderationNote}</small>}
+                          {item.latestReviewAudit?.note && <small className="queue-note">{item.latestReviewAudit?.note}</small>}
                         </button>
                       </div>
                     ))}
@@ -775,14 +811,12 @@ export default function App() {
                           </span>
                           <span className="queue-line">{item.poiHash}</span>
                           <span className="queue-line">{formatQueueDetail(item)}</span>
-                          {item.kind === 'image' && (
-                            <span className="queue-flag-count">Flags {formatFlagCount(item.flagCount)}</span>
-                          )}
-                          {item.kind === 'comment' && item.content && (
-                            <span className="queue-content">{item.content}</span>
+                          <span className="queue-flag-count">Flags {formatFlagCount(item.flagCount)}</span>
+                          {item.kind === 'comment' && item.frontier.content && (
+                            <span className="queue-content">{item.frontier.content}</span>
                           )}
                           <span className="queue-time">{formatAuditSummary(item)}</span>
-                          {item.moderationNote && <small className="queue-note">{item.moderationNote}</small>}
+                          {item.latestReviewAudit?.note && <small className="queue-note">{item.latestReviewAudit?.note}</small>}
                         </button>
                       </div>
                     ))}
@@ -815,14 +849,12 @@ export default function App() {
                           </span>
                           <span className="queue-line">{item.poiHash}</span>
                           <span className="queue-line">{formatQueueDetail(item)}</span>
-                          {item.kind === 'image' && (
-                            <span className="queue-flag-count">Flags {formatFlagCount(item.flagCount)}</span>
-                          )}
-                          {item.kind === 'comment' && item.content && (
-                            <span className="queue-content">{item.content}</span>
+                          <span className="queue-flag-count">Flags {formatFlagCount(item.flagCount)}</span>
+                          {item.kind === 'comment' && item.frontier.content && (
+                            <span className="queue-content">{item.frontier.content}</span>
                           )}
                           <span className="queue-time">{formatAuditSummary(item)}</span>
-                          {item.moderationNote && <small className="queue-note">{item.moderationNote}</small>}
+                          {item.latestReviewAudit?.note && <small className="queue-note">{item.latestReviewAudit?.note}</small>}
                         </button>
                       </div>
                     ))}
@@ -840,7 +872,7 @@ export default function App() {
                   {imagePreview?.id === selected.id ? (
 	                    <img
 	                      src={imagePreview.url}
-	                      alt={selected.content || selected.poiType}
+	                      alt={selected.frontier.content || selected.poiType}
 	                    />
                   ) : (
                     <div className="image-placeholder">{imageError ?? 'Loading image...'}</div>
@@ -849,19 +881,31 @@ export default function App() {
               ) : (
                 <div className="text-frame">
                   <span>Comment</span>
-                  <p>{selected.content || 'No text content returned.'}</p>
+                  <p>{selected.frontier.content || 'No text content returned.'}</p>
                 </div>
               )}
+              <div className="text-frame">
+                <strong>Currently public</strong>
+                {selected.publicSnapshot ? <>
+                  <p>Snapshot {selected.publicSnapshot.snapshotId} / {selected.publicSnapshot.reviewStatus}</p>
+                  <p>{selected.publicSnapshot.content}</p>
+                  {selected.publicSnapshot.filePath && <PublicSnapshotImage filePath={selected.publicSnapshot.filePath} />}
+                  <p>{selected.publicSnapshot.snapshotId === selected.frontier.snapshotId ? 'Same version as frontier.' : 'Public content differs from the frontier under inspection.'}</p>
+                </> : <p>Hidden: no currently public version.</p>}
+              </div>
               <div className="meta-grid">
                 <div><span>Kind</span><strong>{selected.kind}</strong></div>
-                <div><span>Snapshot</span><strong>{selected.snapshotId}</strong></div>
+                <div><span>Frontier snapshot</span><strong>{selected.frontier.snapshotId}</strong></div>
+                <div><span>Review status</span><strong>{selected.frontier.reviewStatus}</strong></div>
+                <div><span>Author deleted</span><strong>{selected.authorDeletedAt || 'No'}</strong></div>
+                <div><span>Admin disabled</span><strong>{selected.adminDeletedAt || 'No'} {selected.adminDeletedBy}</strong></div>
+                <div><span>Flags</span><strong>{formatFlagCount(selected.flagCount)}</strong></div>
                 <div><span>POI</span><strong>{selected.markerId}</strong></div>
                 <div><span>Status</span><strong>{statusLabel(selected.status)}</strong></div>
                 {selected.kind === 'image' && (
                   <>
-                    <div><span>Flags</span><strong>{formatFlagCount(selected.flagCount)}</strong></div>
-                    <div><span>MIME</span><strong>{selected.mimeType || '-'}</strong></div>
-                    <div><span>Size</span><strong>{formatBytes(selected.sizeBytes)}</strong></div>
+                    <div><span>MIME</span><strong>{selected.frontier.mimeType || '-'}</strong></div>
+                    <div><span>Size</span><strong>{formatBytes(selected.frontier.sizeBytes)}</strong></div>
                   </>
                 )}
                 <div><span>Type</span><strong>{selected.poiType}</strong></div>
@@ -879,32 +923,32 @@ export default function App() {
                 <a href={submissionShareUrl(selected)} target="_blank" rel="noreferrer">Open {selected.kind} in frontend</a>
                 {selected.submitter?.nickname && <span>{selected.submitter.nickname}</span>}
               </div>
-              {selected.content && <p className="content">{selected.content}</p>}
-              {selected.moderationNote && <p className="note">{selected.moderationNote}</p>}
+              {selected.frontier.content && <p className="content">{selected.frontier.content}</p>}
+              {selected.latestReviewAudit?.note && <p className="note">{selected.latestReviewAudit?.note}</p>}
               <textarea
                 value={note}
                 onChange={(event) => setNote(event.target.value)}
                 placeholder="Moderator note"
               />
               <div className="actions">
-                {selected.status === 'pending_openai' && (
+                {selected.frontier.reviewStatus === 'pending_openai' && !selected.authorDeletedAt && !selected.adminDeletedAt && (
                   <button
                     type="button"
                     onClick={() => void sendCurrentToAi()}
-                    disabled={Boolean(busyAction)}
+                    disabled={loading || Boolean(busyAction)}
                   >
                     {busyAction?.id === '__ai__' ? 'Sending to AI...' : 'Send to AI Review'}
                   </button>
                 )}
-                {STATUS_TRANSITIONS[selected.status].map((status) => (
+                {availableActions(selected).map((action) => (
                   <button
-                    key={status}
+                    key={action}
                     type="button"
-                    className={status === 'active' ? 'approve' : status === 'stale' ? 'reject' : undefined}
-                    onClick={() => void decide(selected.id, status)}
-                    disabled={Boolean(busyAction)}
+                    className={action === 'approve' ? 'approve' : action === 'reject' || action === 'disable' ? 'reject' : undefined}
+                    onClick={() => void decide(selected, action)}
+                    disabled={loading || Boolean(busyAction)}
                   >
-                    {busyAction?.id === selected.id && busyAction.status === status ? 'Moving...' : actionLabel(status)}
+                    {busyAction?.id === selected.id && busyAction.action === action ? 'Working...' : actionLabel(action)}
                   </button>
                 ))}
               </div>
@@ -1228,8 +1272,8 @@ function formatKindStatus(item: PendingSubmission): string {
 
 function formatQueueDetail(item: PendingSubmission): string {
   const detail = item.kind === 'image'
-    ? formatBytes(item.sizeBytes)
-    : `${Math.max(0, item.content?.length ?? 0)} chars`;
+    ? formatBytes(item.frontier.sizeBytes)
+    : `${Math.max(0, item.frontier.content?.length ?? 0)} chars`;
   return `${formatUserSummary(item)} · ${detail}`;
 }
 
@@ -1258,79 +1302,37 @@ function statusLabel(status: ModerationStatus): string {
 }
 
 type StateActionContext = {
-  statusFilter: ModerationStatus | 'all';
   selectedVisibleItems: PendingSubmission[];
   loading: boolean;
-  updateMany: (targets: PendingSubmission[], status: ModerationStatus, label?: string) => Promise<void>;
+  updateMany: (targets: PendingSubmission[], action: ActionName) => Promise<void>;
   sendSelectedToAi: (targets: PendingSubmission[]) => Promise<void>;
   aiBusy: boolean;
 };
-
-function renderStateActions(context: StateActionContext): React.ReactNode {
-  const {
-    statusFilter,
-    selectedVisibleItems,
-    loading,
-    updateMany,
-    sendSelectedToAi,
-    aiBusy,
-  } = context;
-  const selectedDisabled = loading || selectedVisibleItems.length === 0 || aiBusy;
-
-  if (statusFilter === 'all') {
-    return null;
-  }
-
-  if (statusFilter === 'pending_openai') {
-    return (
-      <>
-        <button type="button" onClick={() => void sendSelectedToAi(selectedVisibleItems)} disabled={selectedDisabled}>
-          {aiBusy ? 'Sending to AI...' : 'Send Selected to AI Review'}
-        </button>
-        <button type="button" onClick={() => void updateMany(selectedVisibleItems, 'pending_audit', 'pending audit selected')} disabled={selectedDisabled}>Pending Audit Selected</button>
-        <button type="button" className="danger-ghost" onClick={() => void updateMany(selectedVisibleItems, 'stale', 'stale selected')} disabled={selectedDisabled}>Stale Selected</button>
-      </>
-    );
-  }
-
-  if (statusFilter === 'pending_audit') {
-    return (
-      <>
-        <button type="button" className="approve" onClick={() => void updateMany(selectedVisibleItems, 'active', 'active selected')} disabled={selectedDisabled}>Active Selected</button>
-        <button type="button" className="danger-ghost" onClick={() => void updateMany(selectedVisibleItems, 'stale', 'stale selected')} disabled={selectedDisabled}>Stale Selected</button>
-      </>
-    );
-  }
-
-  if (statusFilter === 'active') {
-    return (
-      <>
-        <button type="button" className="danger-ghost" onClick={() => void updateMany(selectedVisibleItems, 'stale', 'stale selected')} disabled={selectedDisabled}>Stale Selected</button>
-      </>
-    );
-  }
-
-  if (statusFilter === 'flagged' || statusFilter === 'remove_request') {
-    return (
-      <>
-        <button type="button" className="approve" onClick={() => void updateMany(selectedVisibleItems, 'active', 'active selected')} disabled={selectedDisabled}>Active Selected</button>
-        <button type="button" className="danger-ghost" onClick={() => void updateMany(selectedVisibleItems, 'stale', 'stale selected')} disabled={selectedDisabled}>Stale Selected</button>
-      </>
-    );
-  }
-
-  return (
-    <>
-      <button type="button" className="approve" onClick={() => void updateMany(selectedVisibleItems, 'active', 'active selected')} disabled={selectedDisabled}>Active Selected</button>
-    </>
-  );
+function renderStateActions({ selectedVisibleItems, loading, updateMany, sendSelectedToAi, aiBusy }: StateActionContext): React.ReactNode {
+  const disabled = loading || aiBusy || selectedVisibleItems.length === 0;
+  const actions: ActionName[] = ['approve', 'reject', 'send_to_manual', 'disable', 'clear_flags'];
+  return <>
+    <button type="button" disabled={disabled || !selectedVisibleItems.some(item => availableActions(item).includes('send_to_manual'))} onClick={() => void sendSelectedToAi(selectedVisibleItems)}>Send Selected to AI Review</button>
+    {actions.map(action => <button type="button" key={action} disabled={disabled || !selectedVisibleItems.some(item => availableActions(item).includes(action))} onClick={() => void updateMany(selectedVisibleItems, action)}>{actionLabel(action)} selected</button>)}
+  </>;
 }
-
-function actionLabel(status: ModerationStatus): string {
-  if (status === 'active') return 'Move to active';
-  if (status === 'pending_audit') return 'Send to audit';
-  if (status === 'stale') return 'Move to stale';
-  return `Move to ${statusLabel(status)}`;
+function actionLabel(action: ActionName): string {
+  return { approve: 'Approve', reject: 'Reject', send_to_manual: 'Send to manual', disable: 'Disable submission', clear_flags: 'Clear flags' }[action];
+}
+function PublicSnapshotImage({ filePath }: { filePath: string }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let disposed = false;
+    let objectUrl: string | null = null;
+    setUrl(null); setError(null);
+    void fetchPublicImageBlobUrl(filePath).then(value => {
+      objectUrl = value;
+      if (disposed) URL.revokeObjectURL(value); else setUrl(value);
+    }).catch(err => { if (!disposed) setError(err instanceof Error ? err.message : 'Image unavailable'); });
+    return () => { disposed = true; if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [filePath]);
+  return url ? <img src={url} alt="Currently public image" style={{ maxWidth: '100%' }} /> : <p>{error || 'Loading public image...'}</p>;
 }
 
 function RefreshIcon() {

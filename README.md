@@ -60,3 +60,32 @@ Cloudflare Access policy:
 - Include: the administrator identity group used by the OEM team
 
 The UI also verifies the OEM session through Bayes and only allows users with role `admin`. Cloudflare Access protects the hostname, while Bayes still owns moderation permissions.
+
+## Version-bound management
+
+The inspector shows the latest submitted version (frontier), the currently public
+version, review status, deletion facts and retained flags separately. Review and
+disable bind the clicked frontier. Clear flags binds the returned report target,
+which can be an earlier public version. Hidden and terminal content has no restore
+action. Retained reports covers both comments and images across all dates, in
+100-row pages; actions reset the list to its first page.
+
+Bulk actions are independent requests. The UI waits for every outcome, refreshes
+once and reports committed, unchanged, conflicted and failed requests. A conflict
+requires inspecting the refreshed row and clicking again. A validation error is
+shown as a contract mismatch; commands never fall back to legacy status payloads.
+
+Local checks (no backend or browser required):
+
+```sh
+pnpm install --frozen-lockfile
+pnpm test
+pnpm lint
+pnpm build
+```
+
+Vitest and jsdom mount the actual React pages and use the real HTTP client with an
+isolated fetch transport. The optional Bayes `scripts/vitest.cor.config.ts` suite
+loads this checkout via `COR_REPO_ROOT` and exercises the real authenticated
+moderation routes and new-model test database. These checks do not contact a live
+admin service or validate deployed Cloudflare Access/cookie configuration.

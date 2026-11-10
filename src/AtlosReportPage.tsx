@@ -8,7 +8,6 @@ import {
   type RefObject,
 } from 'react';
 import {
-  MODERATION_DATE_FETCH_LIMIT,
   type ImageCoverageMetric,
   type ImageCoverageReport,
   type PendingSubmission,
@@ -39,7 +38,7 @@ type ReportModel = {
   categories: Array<{ key: string; name: string; metric: ImageCoverageMetric; rate: number }>;
   coreTypes: Array<{ key: string; name: string; metric: ImageCoverageMetric }>;
   otherTypes: Array<{ key: string; name: string; metric: ImageCoverageMetric }>;
-  dailyUploads: Array<{ date: string; count: number; staleCount: number }>;
+  dailyUploads: Array<{ date: string; count: number; rejectedCount: number }>;
   ugcLikes: UgcLikeReport;
   contributors: ContributorStats[];
 };
@@ -101,13 +100,13 @@ const UPLOAD_TREND_RANGES: UploadTrendRange[] = ['7', '30', '90', 'all'];
 
 const ATLOS_COPY = {
   'zh-CN': {
-    title: '地图集影像计划', unavailable: '生产统计暂时不可用。', plan: '地图集影像计划', coreMetrics: '影像计划核心数据', uploads: '累计影像上传', collectionCoverage: '收集物点位覆盖', coreCoverage: '核心类型覆盖', coreTypeCoverage: '核心类型覆盖', imageUnit: ' 张', pointUnit: ' 点位', imagePointRatio: '图片点位比', otherCoverage: '其余类型覆盖', categoryCoverage: '分类覆盖率', typeImageTotal: '类型影像总量', totalCollection: '总收集率', regionComparison: '区域覆盖率对比', regionCoverage: '区域覆盖率', imageTotal: '图片总量', pointTotal: '点位总量', totalComparison: '图片总量与点位总量比较', imagePointTotal: '图片/点位量', imagesPerPoint: '张图片 / 点位', noUploadTypes: '本周期暂无可展示的上传分类。', typeComparison: '八类影像数量对比', dailyUploads: '每日上传数量', rangeLabel: '上传趋势时间范围', all: '全部', daySuffix: ' 天', showStale: '显示 stale', selectedStats: '所选范围上传统计', total: '合计', average: '日均', peak: '峰值', recent: '最近', dailyChart: '每日图片上传柱状图', includesStale: '，包含 stale', reactionTitle: 'UGC 点赞情况', noReactionPeriod: '暂无互动区间', reactionMetrics: 'UGC 点赞核心数据', validLikes: '当前有效点赞', likedUgc: '获赞 UGC', users: '参与用户', commentDislikes: '评论点踩', dailyLikes: '每日有效点赞', daysTotal: '90 天合计', likeChart: '最近九十天图片与评论有效点赞数量', images: '图片', comments: '评论', imageLikes: '图片点赞', commentLikes: '评论点赞', reactionMix: '反馈构成', mostLiked: '最受欢迎图片', viewMostLiked: '在地图中查看最受欢迎图片', likes: '点赞', viewPoint: '查看地图点位', noLikedImage: '暂无公开图片点赞数据', contributorsTitle: '最活跃贡献者', contributorSummary: '贡献者统计概览', contributors: '贡献者', ugcSubmissions: 'UGC 提交', perContributor: '人均贡献', topContributors: '最活跃的十名贡献者', rankUser: '排名 / 用户名 / OEM ID', imageComments: '图片 / 评论', receivedLikes: '获赞', contributions: '贡献量', totalContribution: '总贡献', viewAll: '查看全部', contributorUnit: ' 名贡献者', fullStats: '完整贡献者统计', closeStats: '关闭完整贡献者统计', rank: '排名', username: '用户名', sort: '排序', sortLabel: '贡献者排序方式', byLikes: '按图片与评论收到的点赞总量排序', byKarma: '按当前 Karma 分数排序', byContributions: '按图片与评论提交总量排序', unknown: '未知', noUsername: '未设置用户名', unassigned: '未分配', loading: '正在汇总生产环境影像数据', errorTitle: '暂时无法读取影像统计', retry: '重新读取', admin: '前往管理登录', separator: '，',
+    title: '地图集影像计划', unavailable: '生产统计暂时不可用。', plan: '地图集影像计划', coreMetrics: '影像计划核心数据', uploads: '累计影像上传', collectionCoverage: '收集物点位覆盖', coreCoverage: '核心类型覆盖', coreTypeCoverage: '核心类型覆盖', imageUnit: ' 张', pointUnit: ' 点位', imagePointRatio: '图片点位比', otherCoverage: '其余类型覆盖', categoryCoverage: '分类覆盖率', typeImageTotal: '类型影像总量', totalCollection: '总收集率', regionComparison: '区域覆盖率对比', regionCoverage: '区域覆盖率', imageTotal: '图片总量', pointTotal: '点位总量', totalComparison: '图片总量与点位总量比较', imagePointTotal: '图片/点位量', imagesPerPoint: '张图片 / 点位', noUploadTypes: '本周期暂无可展示的上传分类。', typeComparison: '八类影像数量对比', dailyUploads: '每日上传数量', rangeLabel: '上传趋势时间范围', all: '全部', daySuffix: ' 天', showRejected: '显示审核拒绝', selectedStats: '所选范围上传统计', total: '合计', average: '日均', peak: '峰值', recent: '最近', dailyChart: '每日图片上传柱状图', includesRejected: '，包含审核拒绝', reactionTitle: 'UGC 点赞情况', noReactionPeriod: '暂无互动区间', reactionMetrics: 'UGC 点赞核心数据', validLikes: '当前有效点赞', likedUgc: '获赞 UGC', users: '参与用户', commentDislikes: '评论点踩', dailyLikes: '每日有效点赞', daysTotal: '90 天合计', likeChart: '最近九十天图片与评论有效点赞数量', images: '图片', comments: '评论', imageLikes: '图片点赞', commentLikes: '评论点赞', reactionMix: '反馈构成', mostLiked: '最受欢迎图片', viewMostLiked: '在地图中查看最受欢迎图片', likes: '点赞', viewPoint: '查看地图点位', noLikedImage: '暂无公开图片点赞数据', contributorsTitle: '最活跃贡献者', contributorSummary: '贡献者统计概览', contributors: '贡献者', ugcSubmissions: 'UGC 提交', perContributor: '人均贡献', topContributors: '最活跃的十名贡献者', rankUser: '排名 / 用户名 / OEM ID', imageComments: '图片 / 评论', receivedLikes: '获赞', contributions: '贡献量', totalContribution: '总贡献', viewAll: '查看全部', contributorUnit: ' 名贡献者', fullStats: '完整贡献者统计', closeStats: '关闭完整贡献者统计', rank: '排名', username: '用户名', sort: '排序', sortLabel: '贡献者排序方式', byLikes: '按图片与评论收到的点赞总量排序', byKarma: '按当前 Karma 分数排序', byContributions: '按图片与评论提交总量排序', unknown: '未知', noUsername: '未设置用户名', unassigned: '未分配', loading: '正在汇总生产环境影像数据', errorTitle: '暂时无法读取影像统计', retry: '重新读取', admin: '前往管理登录', separator: '，',
   },
   'zh-HK': {
-    title: '地圖集影像計劃', unavailable: '生產統計暫時不可用。', plan: '地圖集影像計劃', coreMetrics: '影像計劃核心數據', uploads: '累計影像上傳', collectionCoverage: '收集物點位覆蓋', coreCoverage: '核心類型覆蓋', coreTypeCoverage: '核心類型覆蓋', imageUnit: ' 張', pointUnit: ' 點位', imagePointRatio: '圖片點位比', otherCoverage: '其餘類型覆蓋', categoryCoverage: '分類覆蓋率', typeImageTotal: '類型影像總量', totalCollection: '總收集率', regionComparison: '區域覆蓋率對比', regionCoverage: '區域覆蓋率', imageTotal: '圖片總量', pointTotal: '點位總量', totalComparison: '圖片總量與點位總量比較', imagePointTotal: '圖片/點位量', imagesPerPoint: '張圖片 / 點位', noUploadTypes: '本週期暫無可顯示的上傳分類。', typeComparison: '八類影像數量對比', dailyUploads: '每日上傳數量', rangeLabel: '上傳趨勢時間範圍', all: '全部', daySuffix: ' 日', showStale: '顯示 stale', selectedStats: '所選範圍上傳統計', total: '合計', average: '日均', peak: '高峰', recent: '最近', dailyChart: '每日圖片上傳柱狀圖', includesStale: '，包含 stale', reactionTitle: 'UGC 點讚情況', noReactionPeriod: '暫無互動期間', reactionMetrics: 'UGC 點讚核心數據', validLikes: '目前有效點讚', likedUgc: '獲讚 UGC', users: '參與用戶', commentDislikes: '評論負評', dailyLikes: '每日有效點讚', daysTotal: '90 日合計', likeChart: '最近九十日圖片與評論有效點讚數量', images: '圖片', comments: '評論', imageLikes: '圖片點讚', commentLikes: '評論點讚', reactionMix: '反饋構成', mostLiked: '最受歡迎圖片', viewMostLiked: '在地圖中查看最受歡迎圖片', likes: '點讚', viewPoint: '查看地圖點位', noLikedImage: '暫無公開圖片點讚數據', contributorsTitle: '最活躍貢獻者', contributorSummary: '貢獻者統計概覽', contributors: '貢獻者', ugcSubmissions: 'UGC 提交', perContributor: '人均貢獻', topContributors: '最活躍的十名貢獻者', rankUser: '排名 / 用戶名 / OEM ID', imageComments: '圖片 / 評論', receivedLikes: '獲讚', contributions: '貢獻量', totalContribution: '總貢獻', viewAll: '查看全部', contributorUnit: ' 名貢獻者', fullStats: '完整貢獻者統計', closeStats: '關閉完整貢獻者統計', rank: '排名', username: '用戶名', sort: '排序', sortLabel: '貢獻者排序方式', byLikes: '按圖片與評論收到的點讚總量排序', byKarma: '按目前 Karma 分數排序', byContributions: '按圖片與評論提交總量排序', unknown: '未知', noUsername: '未設定用戶名', unassigned: '未分配', loading: '正在匯總生產環境影像數據', errorTitle: '暫時無法讀取影像統計', retry: '重新讀取', admin: '前往管理員登入', separator: '，',
+    title: '地圖集影像計劃', unavailable: '生產統計暫時不可用。', plan: '地圖集影像計劃', coreMetrics: '影像計劃核心數據', uploads: '累計影像上傳', collectionCoverage: '收集物點位覆蓋', coreCoverage: '核心類型覆蓋', coreTypeCoverage: '核心類型覆蓋', imageUnit: ' 張', pointUnit: ' 點位', imagePointRatio: '圖片點位比', otherCoverage: '其餘類型覆蓋', categoryCoverage: '分類覆蓋率', typeImageTotal: '類型影像總量', totalCollection: '總收集率', regionComparison: '區域覆蓋率對比', regionCoverage: '區域覆蓋率', imageTotal: '圖片總量', pointTotal: '點位總量', totalComparison: '圖片總量與點位總量比較', imagePointTotal: '圖片/點位量', imagesPerPoint: '張圖片 / 點位', noUploadTypes: '本週期暫無可顯示的上傳分類。', typeComparison: '八類影像數量對比', dailyUploads: '每日上傳數量', rangeLabel: '上傳趨勢時間範圍', all: '全部', daySuffix: ' 日', showRejected: '顯示審核拒絕', selectedStats: '所選範圍上傳統計', total: '合計', average: '日均', peak: '高峰', recent: '最近', dailyChart: '每日圖片上傳柱狀圖', includesRejected: '，包含审核拒绝', reactionTitle: 'UGC 點讚情況', noReactionPeriod: '暫無互動期間', reactionMetrics: 'UGC 點讚核心數據', validLikes: '目前有效點讚', likedUgc: '獲讚 UGC', users: '參與用戶', commentDislikes: '評論負評', dailyLikes: '每日有效點讚', daysTotal: '90 日合計', likeChart: '最近九十日圖片與評論有效點讚數量', images: '圖片', comments: '評論', imageLikes: '圖片點讚', commentLikes: '評論點讚', reactionMix: '反饋構成', mostLiked: '最受歡迎圖片', viewMostLiked: '在地圖中查看最受歡迎圖片', likes: '點讚', viewPoint: '查看地圖點位', noLikedImage: '暫無公開圖片點讚數據', contributorsTitle: '最活躍貢獻者', contributorSummary: '貢獻者統計概覽', contributors: '貢獻者', ugcSubmissions: 'UGC 提交', perContributor: '人均貢獻', topContributors: '最活躍的十名貢獻者', rankUser: '排名 / 用戶名 / OEM ID', imageComments: '圖片 / 評論', receivedLikes: '獲讚', contributions: '貢獻量', totalContribution: '總貢獻', viewAll: '查看全部', contributorUnit: ' 名貢獻者', fullStats: '完整貢獻者統計', closeStats: '關閉完整貢獻者統計', rank: '排名', username: '用戶名', sort: '排序', sortLabel: '貢獻者排序方式', byLikes: '按圖片與評論收到的點讚總量排序', byKarma: '按目前 Karma 分數排序', byContributions: '按圖片與評論提交總量排序', unknown: '未知', noUsername: '未設定用戶名', unassigned: '未分配', loading: '正在匯總生產環境影像數據', errorTitle: '暫時無法讀取影像統計', retry: '重新讀取', admin: '前往管理員登入', separator: '，',
   },
   en: {
-    title: 'Atlas Image Program', unavailable: 'Production statistics are temporarily unavailable.', plan: 'Atlas Image Program', coreMetrics: 'Key image program metrics', uploads: 'Total image uploads', collectionCoverage: 'Collectible point coverage', coreCoverage: 'Core type coverage', coreTypeCoverage: 'Core Type Coverage', imageUnit: ' images', pointUnit: ' points', imagePointRatio: 'image-to-point ratio', otherCoverage: 'Other Type Coverage', categoryCoverage: 'Category Coverage', typeImageTotal: 'Images by Type', totalCollection: 'Overall coverage', regionComparison: 'Regional coverage comparison', regionCoverage: 'Regional Coverage', imageTotal: 'Images', pointTotal: 'Points', totalComparison: 'Image and point total comparison', imagePointTotal: 'Images / Points', imagesPerPoint: 'images / point', noUploadTypes: 'No upload categories to display for this period.', typeComparison: 'Image count comparison across eight types', dailyUploads: 'Daily Uploads', rangeLabel: 'Upload trend range', all: 'All', daySuffix: ' days', showStale: 'Show stale', selectedStats: 'Upload statistics for selected range', total: 'Total', average: 'Daily avg.', peak: 'Peak', recent: 'Last ', dailyChart: ' daily image upload bar chart', includesStale: ', including stale', reactionTitle: 'UGC Reactions', noReactionPeriod: 'No reaction period available', reactionMetrics: 'Key UGC reaction metrics', validLikes: 'Current valid likes', likedUgc: 'Liked UGC', users: 'Participating users', commentDislikes: 'Comment dislikes', dailyLikes: 'Daily Valid Likes', daysTotal: '90-day total', likeChart: 'Valid image and comment likes over the last 90 days', images: 'Images', comments: 'Comments', imageLikes: 'Image likes', commentLikes: 'Comment likes', reactionMix: 'Reaction Mix', mostLiked: 'Most Liked Image', viewMostLiked: 'View the most liked image on the map', likes: 'Likes', viewPoint: 'View Map Point', noLikedImage: 'No public image like data', contributorsTitle: 'Most Active Contributors', contributorSummary: 'Contributor statistics overview', contributors: 'Contributors', ugcSubmissions: 'UGC submissions', perContributor: 'Avg. per contributor', topContributors: 'Ten most active contributors', rankUser: 'Rank / Username / OEM ID', imageComments: 'Images / Comments', receivedLikes: 'Likes', contributions: 'Contributions', totalContribution: 'Total contributions', viewAll: 'View all', contributorUnit: ' contributors', fullStats: 'Full Contributor Statistics', closeStats: 'Close full contributor statistics', rank: 'Rank', username: 'Username', sort: 'Sort', sortLabel: 'Contributor sort order', byLikes: 'Sorted by total likes received on images and comments', byKarma: 'Sorted by current Karma score', byContributions: 'Sorted by total image and comment submissions', unknown: 'Unknown', noUsername: 'Username not set', unassigned: 'Unassigned', loading: 'Compiling production image data', errorTitle: 'Unable to load image statistics', retry: 'Retry', admin: 'Go to admin sign-in', separator: ', ',
+    title: 'Atlas Image Program', unavailable: 'Production statistics are temporarily unavailable.', plan: 'Atlas Image Program', coreMetrics: 'Key image program metrics', uploads: 'Total image uploads', collectionCoverage: 'Collectible point coverage', coreCoverage: 'Core type coverage', coreTypeCoverage: 'Core Type Coverage', imageUnit: ' images', pointUnit: ' points', imagePointRatio: 'image-to-point ratio', otherCoverage: 'Other Type Coverage', categoryCoverage: 'Category Coverage', typeImageTotal: 'Images by Type', totalCollection: 'Overall coverage', regionComparison: 'Regional coverage comparison', regionCoverage: 'Regional Coverage', imageTotal: 'Images', pointTotal: 'Points', totalComparison: 'Image and point total comparison', imagePointTotal: 'Images / Points', imagesPerPoint: 'images / point', noUploadTypes: 'No upload categories to display for this period.', typeComparison: 'Image count comparison across eight types', dailyUploads: 'Daily Uploads', rangeLabel: 'Upload trend range', all: 'All', daySuffix: ' days', showRejected: 'Show rejected', selectedStats: 'Upload statistics for selected range', total: 'Total', average: 'Daily avg.', peak: 'Peak', recent: 'Last ', dailyChart: ' daily image upload bar chart', includesRejected: ', including rejected', reactionTitle: 'UGC Reactions', noReactionPeriod: 'No reaction period available', reactionMetrics: 'Key UGC reaction metrics', validLikes: 'Current valid likes', likedUgc: 'Liked UGC', users: 'Participating users', commentDislikes: 'Comment dislikes', dailyLikes: 'Daily Valid Likes', daysTotal: '90-day total', likeChart: 'Valid image and comment likes over the last 90 days', images: 'Images', comments: 'Comments', imageLikes: 'Image likes', commentLikes: 'Comment likes', reactionMix: 'Reaction Mix', mostLiked: 'Most Liked Image', viewMostLiked: 'View the most liked image on the map', likes: 'Likes', viewPoint: 'View Map Point', noLikedImage: 'No public image like data', contributorsTitle: 'Most Active Contributors', contributorSummary: 'Contributor statistics overview', contributors: 'Contributors', ugcSubmissions: 'UGC submissions', perContributor: 'Avg. per contributor', topContributors: 'Ten most active contributors', rankUser: 'Rank / Username / OEM ID', imageComments: 'Images / Comments', receivedLikes: 'Likes', contributions: 'Contributions', totalContribution: 'Total contributions', viewAll: 'View all', contributorUnit: ' contributors', fullStats: 'Full Contributor Statistics', closeStats: 'Close full contributor statistics', rank: 'Rank', username: 'Username', sort: 'Sort', sortLabel: 'Contributor sort order', byLikes: 'Sorted by total likes received on images and comments', byKarma: 'Sorted by current Karma score', byContributions: 'Sorted by total image and comment submissions', unknown: 'Unknown', noUsername: 'Username not set', unassigned: 'Unassigned', loading: 'Compiling production image data', errorTitle: 'Unable to load image statistics', retry: 'Retry', admin: 'Go to admin sign-in', separator: ', ',
   },
 } as const;
 
@@ -120,25 +119,20 @@ export default function AtlosReportPage() {
   const loadReport = useCallback(async () => {
     setState({ status: 'loading' });
     try {
-      const [report, submissions, staleSubmissions, ugcLikes] = await Promise.all([
+      const [report, submissions, ugcLikes] = await Promise.all([
         getImageCoverage(),
-        listPendingSubmissions({
-          statuses: ['active'],
-          limit: MODERATION_DATE_FETCH_LIMIT,
-        }),
-        listPendingSubmissions({
-          statuses: ['stale'],
-          limit: MODERATION_DATE_FETCH_LIMIT,
-        }),
+        loadReportSubmissions(),
         getUgcLikeReport(),
       ]);
+      // Compatibility status 'stale' also covers unknown/deleted/disabled rows.
+      // Public identity and actual rejection are independent server facts.
       setState({
         status: 'ready',
         data: buildReportModel(
           report,
-          submissions.items,
+          submissions.filter(item => item.publicSnapshot !== null),
           ugcLikes,
-          staleSubmissions.items,
+          submissions.filter(item => item.frontier.reviewStatus === 'rejected'),
         ),
       });
     } catch (error) {
@@ -569,13 +563,13 @@ function DailyUploadChart({ active, items }: {
   const { locale } = useReportLocale();
   const copy = ATLOS_COPY[locale];
   const [range, setRange] = useState<UploadTrendRange>('90');
-  const [showStale, setShowStale] = useState(false);
+  const [showRejected, setShowRejected] = useState(false);
   const visibleItems = useMemo(() => {
     if (range === 'all') return items;
     return items.slice(-Number(range));
   }, [items, range]);
   const itemTotal = (item: ReportModel['dailyUploads'][number]) => (
-    item.count + item.staleCount
+    item.count + item.rejectedCount
   );
   const maximum = Math.max(...visibleItems.map(itemTotal), 1);
   const total = visibleItems.reduce((sum, item) => sum + itemTotal(item), 0);
@@ -610,11 +604,11 @@ function DailyUploadChart({ active, items }: {
           <label className="report-stale-toggle">
             <input
               type="checkbox"
-              checked={showStale}
-              onChange={(event) => setShowStale(event.target.checked)}
+              checked={showRejected}
+              onChange={(event) => setShowRejected(event.target.checked)}
             />
             <span aria-hidden="true" />
-            {copy.showStale}
+            {copy.showRejected}
           </label>
         </div>
       </div>
@@ -627,12 +621,12 @@ function DailyUploadChart({ active, items }: {
         <div
           className="report-daily-chart"
           style={chartStyle}
-          aria-label={`${range === 'all' ? copy.all : `${copy.recent}${range}${copy.daySuffix}`}${copy.dailyChart}${showStale ? copy.includesStale : ''}`}
+          aria-label={`${range === 'all' ? copy.all : `${copy.recent}${range}${copy.daySuffix}`}${copy.dailyChart}${showRejected ? copy.includesRejected : ''}`}
         >
           {visibleItems.map((item, index) => {
             const activeHeight = item.count > 0 ? Math.max(3, (item.count / maximum) * 100) : 0;
-            const staleHeight = item.staleCount > 0 ? Math.max(3, (item.staleCount / maximum) * 100) : 0;
-            const description = `active ${formatReportInteger(item.count, locale)}${copy.imageUnit}${copy.separator}stale ${formatReportInteger(item.staleCount, locale)}${copy.imageUnit}`;
+            const rejectedHeight = item.rejectedCount > 0 ? Math.max(3, (item.rejectedCount / maximum) * 100) : 0;
+            const description = `public ${formatReportInteger(item.count, locale)}${copy.imageUnit}${copy.separator}rejected ${formatReportInteger(item.rejectedCount, locale)}${copy.imageUnit}`;
             return (
               <div
                 className={`report-daily-bar${isRedUploadDay(item.date) ? ' is-red-day' : ''}`}
@@ -644,9 +638,9 @@ function DailyUploadChart({ active, items }: {
                   '--chart-value': `${activeHeight}%`,
                   '--chart-delay': `${index * 12}ms`,
                 } as ChartStyle} />
-                {showStale && (
+                {showRejected && (
                   <i style={{
-                    '--chart-value': `${staleHeight}%`,
+                    '--chart-value': `${rejectedHeight}%`,
                     '--chart-delay': `${index * 12}ms`,
                   } as ChartStyle} />
                 )}
@@ -1226,18 +1220,30 @@ function ReportError({ message, onRetry }: { message: string; onRetry: () => voi
   );
 }
 
+async function loadReportSubmissions(): Promise<PendingSubmission[]> {
+  const items: PendingSubmission[] = [];
+  let offset: number | undefined;
+  for (;;) {
+    const page = await listPendingSubmissions({ limit: 100, ...(offset === undefined ? {} : { offset }) });
+    items.push(...page.items);
+    if (page.nextOffset === null) break;
+    offset = page.nextOffset;
+  }
+  return items;
+}
+
 function buildReportModel(
   report: ImageCoverageReport,
   submissions: PendingSubmission[],
   ugcLikes: UgcLikeReport,
-  staleSubmissions: PendingSubmission[],
+  rejectedSubmissions: PendingSubmission[],
 ): ReportModel {
   const imageSubmissions = submissions.filter((submission) => submission.kind === 'image');
-  const staleImageSubmissions = staleSubmissions.filter((submission) => submission.kind === 'image');
-  const allSubmissions = [...submissions, ...staleSubmissions];
-  const allImageSubmissions = [...imageSubmissions, ...staleImageSubmissions];
+  const rejectedImageSubmissions = rejectedSubmissions.filter((submission) => submission.kind === 'image');
+  const allSubmissions = [...submissions, ...rejectedSubmissions];
+  const allImageSubmissions = [...imageSubmissions, ...rejectedImageSubmissions];
   const imageCount = allImageSubmissions.length;
-  const dailyUploads = buildDailyUploadCounts(imageSubmissions, staleImageSubmissions);
+  const dailyUploads = buildDailyUploadCounts(imageSubmissions, rejectedImageSubmissions);
   const uploadCount = allImageSubmissions.length;
   const uploadTypeCounts = new Map<string, number>();
   for (const submission of imageSubmissions) {
@@ -1354,14 +1360,14 @@ function buildContributorStats(
 
 function buildDailyUploadCounts(
   submissions: PendingSubmission[],
-  staleSubmissions: PendingSubmission[],
+  rejectedSubmissions: PendingSubmission[],
 ): ReportModel['dailyUploads'] {
   const chinaOffsetMs = 8 * 60 * 60 * 1000;
   const chinaToday = new Date(Date.now() + chinaOffsetMs);
   chinaToday.setUTCHours(0, 0, 0, 0);
   const minimumStart = new Date(chinaToday);
   minimumStart.setUTCDate(minimumStart.getUTCDate() - 89);
-  const earliestCreatedAt = [...submissions, ...staleSubmissions].reduce<Date | null>((earliest, submission) => {
+  const earliestCreatedAt = [...submissions, ...rejectedSubmissions].reduce<Date | null>((earliest, submission) => {
     const createdAt = new Date(submission.createdAt);
     if (!Number.isFinite(createdAt.getTime())) return earliest;
     const chinaDate = new Date(createdAt.getTime() + chinaOffsetMs);
@@ -1375,13 +1381,13 @@ function buildDailyUploadCounts(
   const items = Array.from({ length: dayCount }, (_, index) => {
     const date = new Date(startDate);
     date.setUTCDate(date.getUTCDate() + index);
-    return { date: date.toISOString().slice(0, 10), count: 0, staleCount: 0 };
+    return { date: date.toISOString().slice(0, 10), count: 0, rejectedCount: 0 };
   });
   const counts = new Map(items.map((item) => [item.date, item]));
 
   for (const [rows, key] of [
     [submissions, 'count'],
-    [staleSubmissions, 'staleCount'],
+    [rejectedSubmissions, 'rejectedCount'],
   ] as const) {
     for (const submission of rows) {
       const createdAt = new Date(submission.createdAt);
