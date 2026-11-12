@@ -248,6 +248,7 @@ it('captures disable on B separately from review and shows both image versions',
   rows = [
     {
       ...row('image'),
+      lifecycleVersion: 2,
       kind: 'image',
       frontier: { ...row().frontier, filePath: 'images/B.webp' },
       publicSnapshot: { ...row().publicSnapshot!, filePath: 'images/A.webp' },
@@ -258,7 +259,7 @@ it('captures disable on B separately from review and shows both image versions',
   expect(reads.map((url) => url.pathname)).toContain('/api/uploads/v1/public-file/images/A.webp');
   expect(reads.map((url) => url.pathname)).toContain('/api/uploads/v1/file/images/B.webp');
   await click('Disable submission');
-  expect(requests[0].body).toEqual({ action: 'disable', snapshotId: 'B' });
+  expect(requests[0].body).toEqual({ action: 'disable', snapshotId: 'B', expectedLifecycleVersion: 2 });
 });
 
 

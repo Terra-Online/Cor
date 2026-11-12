@@ -51,7 +51,7 @@ function availableActions(item: PendingSubmission): ActionName[] {
   return actions;
 }
 function captureAction(item: PendingSubmission, action: ActionName, note: string): ModerationAction {
-  if (action === 'disable') return { action, snapshotId: item.frontier.snapshotId };
+  if (action === 'disable') return { action, snapshotId: item.frontier.snapshotId, expectedLifecycleVersion: item.lifecycleVersion ?? 0 };
   if (action === 'clear_flags') return { action };
   const phase = item.frontier.reviewStatus;
   if (phase !== 'pending_openai' && phase !== 'pending_audit') throw new Error('Refresh before reviewing this terminal version.');

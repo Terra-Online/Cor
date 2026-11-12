@@ -89,3 +89,8 @@ isolated fetch transport. The optional Bayes `scripts/vitest.cor.config.ts` suit
 loads this checkout via `COR_REPO_ROOT` and exercises the real authenticated
 moderation routes and new-model test database. These checks do not contact a live
 admin service or validate deployed Cloudflare Access/cookie configuration.
+
+UGC deletion concurrency: disable commands send the row's `lifecycleVersion` as
+`expectedLifecycleVersion`. This prevents a delayed command from deleting content
+again after an administrator restored it. A missing version from an older backend
+is treated as zero during rollout.
