@@ -6,11 +6,14 @@ import type { ManagementSnapshot, PendingSubmission } from './api';
 import AtlosReportPage from './AtlosReportPage';
 import { ReportLocaleProvider } from './reportLocale';
 
-it('counts real rejections separately from hidden approved and unknown records, and includes public A with pending B', async () => {
+it.each([
+  { name: 'server-capped pagination', total: 4, pageCap: 2, maximumRequests: 2 },
+  { name: 'production-sized history', total: 7944, pageCap: 10000, maximumRequests: 1 },
+])('loads $name with bounded requests while preserving rejection and public-snapshot statistics', async ({ total, pageCap, maximumRequests }) => {
   (
     globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
   ).IS_REACT_ACT_ENVIRONMENT = true;
-  window.history.replaceState(null, '', '/atlos-report?lang=en');
+  window.history.replaceState(null, '', '/report?lang=en');
   vi.stubGlobal('matchMedia', () => ({ matches: true }));
   vi.stubGlobal(
     'IntersectionObserver',
@@ -61,6 +64,9 @@ it('counts real rejections separately from hidden approved and unknown records, 
     { ...common, id: 'disabled', adminDeletedAt: '2026-10-01' },
     { ...common, id: 'unknown', frontier: { ...snapshot, reviewStatus: 'unknown' } },
   ];
+  const submissions = [publicEdit, ...hidden, ...Array.from({ length: total - 4 }, (_, index): PendingSubmission => ({
+    ...common, id: `retained-${index}`, frontier: { ...snapshot, reviewStatus: 'unknown' },
+  }))];
   const reads: URL[] = [];
   vi.stubGlobal(
     'fetch',
@@ -86,20 +92,14 @@ it('counts real rejections separately from hidden approved and unknown records, 
           topImage: null,
         });
       reads.push(url);
-      const status = url.searchParams.get('status');
+      const offset = Number(url.searchParams.get('offset') || 0);
+      const limit = Math.min(Number(url.searchParams.get('limit')), pageCap);
       return Response.json({
-        items:
-          status === 'active'
-            ? []
-            : status === 'stale'
-              ? hidden
-              : url.searchParams.get('offset') === '100'
-                ? hidden
-                : [publicEdit],
-        nextOffset: !status && !url.searchParams.has('offset') ? 100 : null,
-        offset: Number(url.searchParams.get('offset') || 0),
-        limit: 100,
-        stats: { total: 4, byKind: [], byType: [], byStatus: [], byReviewStatus: [] },
+        items: submissions.slice(offset, offset + limit),
+        nextOffset: offset + limit < submissions.length ? offset + limit : null,
+        offset,
+        limit,
+        stats: { total: submissions.length, byKind: [], byType: [], byStatus: [], byReviewStatus: [] },
       });
     }),
   );
@@ -119,7 +119,8 @@ it('counts real rejections separately from hidden approved and unknown records, 
     });
     const today = [...host.querySelectorAll('.report-daily-bar')].at(-1);
     expect(today?.getAttribute('aria-label')).toContain('public 1 images, rejected 1 images');
-    expect(reads.at(-1)!.searchParams.get('offset')).toBe('100');
+    expect(reads.length).toBeLessThanOrEqual(maximumRequests);
+    if (total === 4) expect(reads.at(-1)!.searchParams.get('offset')).toBe('2');
     expect(host.textContent).toContain('Show rejected');
   } finally {
     await act(async () => root.unmount());

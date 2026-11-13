@@ -8,6 +8,7 @@ import {
   type RefObject,
 } from 'react';
 import {
+  MODERATION_DATE_FETCH_LIMIT,
   type ImageCoverageMetric,
   type ImageCoverageReport,
   type PendingSubmission,
@@ -1224,7 +1225,9 @@ async function loadReportSubmissions(): Promise<PendingSubmission[]> {
   const items: PendingSubmission[] = [];
   let offset: number | undefined;
   for (;;) {
-    const page = await listPendingSubmissions({ limit: 100, ...(offset === undefined ? {} : { offset }) });
+    // Use the existing bulk limit: the report needs the full history, and every
+    // management page also recomputes global statistics.
+    const page = await listPendingSubmissions({ limit: MODERATION_DATE_FETCH_LIMIT, ...(offset === undefined ? {} : { offset }) });
     items.push(...page.items);
     if (page.nextOffset === null) break;
     offset = page.nextOffset;
